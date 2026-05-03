@@ -88,15 +88,28 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);dis
 .ch-status.on{color:var(--green)}
 .ch-actions{display:flex;gap:6px;position:relative}
 
-.video-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.vbox{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;position:relative;min-height:180px}
+/* CALL STYLES */
+.video-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.vbox{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;position:relative;min-height:240px;display:flex;align-items:center;justify-content:center;}
 .vbox video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
 .vlabel{position:absolute;left:10px;bottom:10px;background:#0008;color:#fff;padding:4px 8px;border-radius:10px;font-size:11px}
-.call-bar{display:flex;gap:8px;justify-content:center}
-.call-btn{width:46px;height:46px;border-radius:16px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;font-size:18px; transition: 0.2s;}
+.call-bar{display:flex;gap:12px;justify-content:center;margin-top:20px;}
+.call-btn{width:54px;height:54px;border-radius:18px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;font-size:20px; transition: 0.2s; display:flex; align-items:center; justify-content:center;}
+.call-btn:hover{background:var(--card2);}
 .call-btn.danger{background:#e1705520;border-color:#e17055;color:#e17055}
-.call-btn.on{border-color:var(--accent2);color:var(--accent2)}
-.call-mini{font-size:11px;color:var(--muted);text-align:center}
+.call-btn.danger:hover{background:#e1705540;}
+.call-btn.on{border-color:var(--accent2);color:var(--accent2);background:#00cec910;}
+.call-btn.accept-btn{background:#00b894; color:#fff; border-color:#00b894;}
+.call-btn.accept-btn:hover{background:#00a082;}
+.call-mini{font-size:13px;color:var(--muted);text-align:center;margin-bottom:16px;}
+
+/* INCOMING CALL MODAL */
+.incoming-call-box { text-align: center; }
+.inc-ava { width: 100px; height: 100px; border-radius: 50%; font-family: 'Unbounded', sans-serif; background: linear-gradient(135deg, var(--accent), #a29bfe); color: white; font-size: 36px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; animation: ringPulse 1.5s infinite; }
+.inc-name { font-size: 24px; font-weight: 700; font-family: 'Unbounded', sans-serif; margin-bottom: 8px; }
+.inc-status { font-size: 14px; color: var(--accent2); margin-bottom: 30px; letter-spacing: 1px; }
+@keyframes ringPulse { 0% { box-shadow: 0 0 0 0px rgba(108, 92, 231, 0.4); } 100% { box-shadow: 0 0 0 30px rgba(108, 92, 231, 0); } }
+
 .pinned-bar{padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--border);display:none;align-items:center;gap:10px;cursor:pointer}
 .pinned-bar.show{display:flex}
 .pinned-line{width:3px;height:30px;background:var(--accent);border-radius:2px;flex-shrink:0}
@@ -441,24 +454,6 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
   </div>
 </div>
 
-<div class="overlay" id="group-info-modal">
-  <div class="modal">
-    <h3>Управление группой</h3>
-    <div class="field"><label>Название</label><input type="text" id="gi-title" placeholder="Название"></div>
-    <div style="display:flex;gap:10px">
-      <button class="bcn" onclick="document.getElementById('fi-group-ava').click()">Аватар группы</button>
-      <button class="bcn" onclick="openGroupAddMembers()">Добавить участников</button>
-    </div>
-    <div class="settings-label">Участники</div>
-    <div id="gi-members" style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
-    <div class="merr" id="gi-err"></div>
-    <div class="mactions">
-      <button class="bcn" onclick="closeModal('group-info-modal')">Закрыть</button>
-      <button class="btn btn-primary" style="flex:1" onclick="saveGroup()">Сохранить</button>
-    </div>
-  </div>
-</div>
-
 <div class="overlay" id="settings-modal">
   <div class="modal">
     <h3>Настройки</h3>
@@ -503,13 +498,25 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
   </div>
 </div>
 
-<!-- CALL MODAL -->
+<!-- CALL MODALS -->
+<div class="overlay" id="incoming-call-modal">
+  <div class="modal incoming-call-box" style="max-width: 320px;">
+    <div class="inc-ava" id="inc-caller-ava">👤</div>
+    <div class="inc-name" id="inc-caller-name">Имя Звонящего</div>
+    <div class="inc-status">Входящий звонок...</div>
+    <div class="call-bar">
+      <button class="call-btn danger" onclick="declineCall()" title="Отклонить">📞</button>
+      <button class="call-btn accept-btn" onclick="answerCall()" title="Принять">📞</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="call-modal">
   <div class="modal" style="max-width:780px">
     <h3 id="call-title">Звонок</h3>
-    <div class="call-mini" id="call-sub">Включите микрофон или камеру, чтобы начать общение</div>
+    <div class="call-mini" id="call-sub">Соединение...</div>
     <div class="video-grid" id="video-grid">
-      <div class="vbox">
+      <div class="vbox" id="local-vbox">
         <video id="local-video" autoplay muted playsinline></video>
         <div class="vlabel" id="local-label">Вы</div>
       </div>
@@ -546,11 +553,15 @@ const onlineByUid=new Map();
 const lastSeenByUid=new Map();
 let msgsCache=[];
 let myPhotoURL='';
-let circleRecorder=null;
-let circleChunks=[];
-let circleStopTimer=null;
 
-let localStream=null;
+// WEBRTC CALL VARIABLES
+let pc = null;
+let currentCallId = null;
+let callUnsub = null;
+let globalCallUnsub = null;
+let localStream = null;
+let remoteStream = null;
+const servers = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
 
 if(location.protocol === 'file:') document.getElementById('proto-warning').style.display = 'block';
 
@@ -619,6 +630,8 @@ function cleanupSubs(){
   if(msgUnsub){msgUnsub();msgUnsub=null;}
   if(chatListUnsub){chatListUnsub();chatListUnsub=null;}
   if(typingUnsub){typingUnsub();typingUnsub=null;}
+  if(globalCallUnsub){globalCallUnsub();globalCallUnsub=null;}
+  if(callUnsub){callUnsub();callUnsub=null;}
   presenceUnsubs.forEach(u=>u());presenceUnsubs.clear();
   onlineByUid.clear();
   lastSeenByUid.clear();
@@ -700,6 +713,7 @@ async function initApp(){
   setPresence(true);
   loadChats();
   buildEmoji();
+  listenForCalls();
 }
 
 async function saveProfile(){
@@ -877,7 +891,7 @@ function watchPresence(uid){
       $('ch-status').textContent=on?'● Онлайн':'Не в сети';
       $('ch-status').className='ch-status'+(on?' on':'');
     }
-    renderChatList(); // Обновляем список, если открыта вкладка "Онлайн"
+    renderChatList();
   });
   presenceUnsubs.set(uid,unsub);
 }
@@ -919,14 +933,9 @@ function renderChatList(){
     const nm = (d.isGroup ? (d.title||d.name||'') : (d.name||''));
     if(sq && !nm.toLowerCase().includes(sq))return false;
     
-    // Исправленная логика фильтрации
-    if(sTab==='unread') {
-      return d.unread > 0; // Показываем только те чаты, где есть непрочитанные МНОЙ сообщения
-    }
-    if(sTab==='online') {
-      return !d.isGroup && d.pid && onlineByUid.get(d.pid) === true; // Показываем только тех кто онлайн
-    }
-    return true; // Вкладка 'all'
+    if(sTab==='unread') { return d.unread > 0; }
+    if(sTab==='online') { return !d.isGroup && d.pid && onlineByUid.get(d.pid) === true; }
+    return true;
   }).sort((a,b)=>{
     return (b[1].lastTs?.seconds||0)-(a[1].lastTs?.seconds||0);
   });
@@ -1144,7 +1153,7 @@ function buildEmoji(){
       grid.innerHTML='';
       EMOJI[c].forEach(em=>{
         const e=document.createElement('div'); e.className='emj'; e.textContent=em;
-        e.onclick=()=>{ $('msg-inp').innerText += em; }; // Исправлена синтаксическая ошибка здесь
+        e.onclick=()=>{ $('msg-inp').innerText += em; };
         grid.appendChild(e);
       });
     };
@@ -1160,74 +1169,211 @@ async function delMsg(mid) {
   }
 }
 
-// ==== ЗВОНКИ (WebRTC UI MOCK - Камера/Микрофон включаются вручную) ====
+// ==== WEBRTC ЗВОНКИ ====
 
-function startCall() {
+function listenForCalls() {
+  if(globalCallUnsub) globalCallUnsub();
+  const q = query(collection(db, 'calls'), where('callee', '==', me.uid), where('status', '==', 'ringing'));
+  globalCallUnsub = onSnapshot(q, snap => {
+    snap.docChanges().forEach(change => {
+      if (change.type === 'added') {
+        const callData = change.doc.data();
+        currentCallId = change.doc.id;
+        showIncomingCall(currentCallId, callData);
+      }
+    });
+  });
+}
+
+function showIncomingCall(callId, data) {
+  $('inc-caller-name').textContent = data.callerName || 'Неизвестный';
+  $('inc-caller-ava').textContent = ini(data.callerName);
+  openModal('incoming-call-modal');
+  
+  if(callUnsub) callUnsub();
+  callUnsub = onSnapshot(doc(db, 'calls', callId), snap => {
+    if(snap.exists() && (snap.data().status === 'ended' || snap.data().status === 'declined')) {
+      closeModal('incoming-call-modal');
+      currentCallId = null;
+      if(callUnsub) { callUnsub(); callUnsub = null; }
+    }
+  });
+}
+
+async function startCall() {
   if(!curChat) return;
+  if(curChat.isGroup) { toast('Звонки доступны только в личных чатах'); return; }
+  
   $('call-title').textContent = curChat.name;
   openModal('call-modal');
-  $('btn-mic').classList.remove('on');
-  $('btn-cam').classList.remove('on');
-  if(localStream) {
-    localStream.getTracks().forEach(t=>t.stop());
-    localStream = null;
-    $('local-video').srcObject = null;
+  $('call-sub').textContent = 'Звонок...';
+
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+    $('local-video').srcObject = localStream;
+    $('btn-mic').classList.add('on');
+    $('btn-cam').classList.add('on');
+
+    pc = new RTCPeerConnection(servers);
+    remoteStream = new MediaStream();
+    
+    if(!$('remote-vbox')) {
+      $('video-grid').innerHTML += `<div class="vbox" id="remote-vbox"><video id="remote-video" autoplay playsinline></video><div class="vlabel" id="remote-label">${curChat.name}</div></div>`;
+    }
+    $('remote-video').srcObject = remoteStream;
+
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    pc.ontrack = event => {
+      event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+    };
+
+    const callDoc = doc(collection(db, 'calls'));
+    currentCallId = callDoc.id;
+    const offerCandidates = collection(callDoc, 'callerCandidates');
+    const answerCandidates = collection(callDoc, 'calleeCandidates');
+
+    pc.onicecandidate = event => {
+      if(event.candidate) addDoc(offerCandidates, event.candidate.toJSON());
+    };
+
+    const offerData = await pc.createOffer();
+    await pc.setLocalDescription(offerData);
+
+    await setDoc(callDoc, {
+      caller: me.uid,
+      callee: curChat.pid,
+      callerName: me.displayName || me.email || $('my-name').textContent,
+      offer: { type: offerData.type, sdp: offerData.sdp },
+      status: 'ringing'
+    });
+
+    if(callUnsub) callUnsub();
+    callUnsub = onSnapshot(callDoc, snapshot => {
+      const data = snapshot.data();
+      if(!data) return;
+      if(data.status === 'ended' || data.status === 'declined') { endCall(false); toast('Звонок завершен'); }
+      if(!pc.currentRemoteDescription && data.answer) {
+        const answer = new RTCSessionDescription(data.answer);
+        pc.setRemoteDescription(answer);
+        $('call-sub').textContent = 'Соединение установлено';
+      }
+    });
+
+    onSnapshot(answerCandidates, snapshot => {
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      });
+    });
+  } catch (error) {
+    toast('Ошибка доступа к камере/микрофону');
+    endCall(false);
   }
 }
 
-function endCall() {
+async function answerCall() {
+  closeModal('incoming-call-modal');
+  openModal('call-modal');
+  $('call-title').textContent = $('inc-caller-name').textContent;
+  $('call-sub').textContent = 'Соединение...';
+
+  try {
+    const callDoc = doc(db, 'calls', currentCallId);
+    const callData = (await getDoc(callDoc)).data();
+
+    localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+    $('local-video').srcObject = localStream;
+    $('btn-mic').classList.add('on');
+    $('btn-cam').classList.add('on');
+
+    pc = new RTCPeerConnection(servers);
+    remoteStream = new MediaStream();
+    
+    if(!$('remote-vbox')) {
+      $('video-grid').innerHTML += `<div class="vbox" id="remote-vbox"><video id="remote-video" autoplay playsinline></video><div class="vlabel" id="remote-label">Собеседник</div></div>`;
+    }
+    $('remote-video').srcObject = remoteStream;
+
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    pc.ontrack = event => {
+      event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+    };
+
+    const answerCandidates = collection(callDoc, 'calleeCandidates');
+    pc.onicecandidate = event => {
+      if(event.candidate) addDoc(answerCandidates, event.candidate.toJSON());
+    };
+
+    await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+    const answerData = await pc.createAnswer();
+    await pc.setLocalDescription(answerData);
+
+    await updateDoc(callDoc, { answer: { type: answerData.type, sdp: answerData.sdp }, status: 'connected' });
+
+    onSnapshot(collection(callDoc, 'callerCandidates'), snapshot => {
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      });
+    });
+
+    if(callUnsub) callUnsub();
+    callUnsub = onSnapshot(callDoc, snapshot => {
+      if(snapshot.exists() && snapshot.data().status === 'ended') {
+        endCall(false); toast('Собеседник завершил звонок');
+      }
+    });
+  } catch (error) {
+    toast('Ошибка ответа на звонок');
+    endCall();
+  }
+}
+
+async function declineCall() {
+  if(currentCallId) {
+    try { await updateDoc(doc(db, 'calls', currentCallId), { status: 'declined' }); } catch(e){}
+  }
+  closeModal('incoming-call-modal');
+  currentCallId = null;
+  if(callUnsub) { callUnsub(); callUnsub = null; }
+}
+
+async function endCall(updateDb = true) {
   closeModal('call-modal');
-  if(localStream) {
-    localStream.getTracks().forEach(t => t.stop());
-    localStream = null;
-    $('local-video').srcObject = null;
+  if(updateDb && currentCallId) {
+    try { await updateDoc(doc(db, 'calls', currentCallId), { status: 'ended' }); } catch(e){}
   }
+  if(pc) { pc.close(); pc = null; }
+  if(localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  $('local-video').srcObject = null;
+  const remVbox = $('remote-vbox');
+  if(remVbox) {
+    $('remote-video').srcObject = null;
+    remVbox.remove();
+  }
+  currentCallId = null;
+  if(callUnsub) { callUnsub(); callUnsub = null; }
   $('btn-mic').classList.remove('on');
   $('btn-cam').classList.remove('on');
 }
 
-async function toggleMic() {
+function toggleMic() {
   const btn = $('btn-mic');
-  if(btn.classList.contains('on')) {
-    if(localStream) {
-      localStream.getAudioTracks().forEach(t => { t.enabled = false; });
+  if(localStream) {
+    const audioTrack = localStream.getAudioTracks()[0];
+    if(audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      btn.classList.toggle('on', audioTrack.enabled);
     }
-    btn.classList.remove('on');
-  } else {
-    try {
-      if(!localStream) {
-        localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: $('btn-cam').classList.contains('on')});
-        $('local-video').srcObject = localStream;
-      } else {
-        const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-        localStream.addTrack(stream.getAudioTracks()[0]);
-      }
-      localStream.getAudioTracks().forEach(t => { t.enabled = true; });
-      btn.classList.add('on');
-      $('call-sub').textContent = 'Микрофон включен';
-    } catch(e) { toast('Не удалось получить доступ к микрофону'); }
   }
 }
 
-async function toggleCam() {
+function toggleCam() {
   const btn = $('btn-cam');
-  if(btn.classList.contains('on')) {
-    if(localStream) {
-      localStream.getVideoTracks().forEach(t => { t.stop(); localStream.removeTrack(t); });
+  if(localStream) {
+    const videoTrack = localStream.getVideoTracks()[0];
+    if(videoTrack) {
+      videoTrack.enabled = !videoTrack.enabled;
+      btn.classList.toggle('on', videoTrack.enabled);
     }
-    btn.classList.remove('on');
-  } else {
-    try {
-      if(!localStream) {
-        localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: $('btn-mic').classList.contains('on')});
-      } else {
-        const stream = await navigator.mediaDevices.getUserMedia({video: true});
-        localStream.addTrack(stream.getVideoTracks()[0]);
-      }
-      $('local-video').srcObject = localStream;
-      btn.classList.add('on');
-      $('call-sub').textContent = 'Камера включена';
-    } catch(e) { toast('Не удалось получить доступ к камере'); }
   }
 }
 
@@ -1258,9 +1404,11 @@ window.goBack = goBack;
 window.toggleEmoji = toggleEmoji;
 window.startCall = startCall;
 window.endCall = endCall;
+window.answerCall = answerCall;
+window.declineCall = declineCall;
 window.toggleMic = toggleMic;
 window.toggleCam = toggleCam;
-window.toggleScreenShare = () => toast("Показ экрана временно недоступен");
+window.toggleScreenShare = () => toast("Показ экрана в разработке");
 
 </script>
 </body>
