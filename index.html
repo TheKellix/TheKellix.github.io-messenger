@@ -1171,28 +1171,31 @@ async function delMsg(mid) {
 
 // ==== WEBRTC ЗВОНКИ ====
 
+// 1. СЛУШАТЕЛЬ ВХОДЯЩИХ (Запускать при логине)
 function listenForCalls() {
   if(globalCallUnsub) globalCallUnsub();
   const q = query(collection(db, 'calls'), where('callee', '==', me.uid), where('status', '==', 'ringing'));
   globalCallUnsub = onSnapshot(q, snap => {
     snap.docChanges().forEach(change => {
       if (change.type === 'added') {
-        const callData = change.doc.data();
         currentCallId = change.doc.id;
-        showIncomingCall(currentCallId, callData);
+        showIncomingCall(currentCallId, change.doc.data());
       }
     });
   });
 }
 
+// 2. МОДАЛКА ВХОДЯЩЕГО ВЫЗОВА
 function showIncomingCall(callId, data) {
   $('inc-caller-name').textContent = data.callerName || 'Неизвестный';
   $('inc-caller-ava').textContent = ini(data.callerName);
+  currentCallId = callId;
   openModal('incoming-call-modal');
   
   if(callUnsub) callUnsub();
   callUnsub = onSnapshot(doc(db, 'calls', callId), snap => {
-    if(snap.exists() && (snap.data().status === 'ended' || snap.data().status === 'declined')) {
+    const d = snap.data();
+    if(snap.exists() && (d.status === 'ended' || d.status === 'declined')) {
       closeModal('incoming-call-modal');
       currentCallId = null;
       if(callUnsub) { callUnsub(); callUnsub = null; }
@@ -1200,13 +1203,14 @@ function showIncomingCall(callId, data) {
   });
 }
 
+// 3. ФУНКЦИЯ "ПОЗВОНИТЬ" (Для того, кто инициирует)
 async function startCall() {
   if(!curChat) return;
-  if(curChat.isGroup) { toast('Звонки доступны только в личных чатах'); return; }
+  if(curChat.isGroup) { toast('Звонки только в личных чатах'); return; }
   
   $('call-title').textContent = curChat.name;
   openModal('call-modal');
-  $('call-sub').textContent = 'Звонок...';
+  $('call-sub').textContent = 'Вызов...';
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
@@ -1242,7 +1246,7 @@ async function startCall() {
     await setDoc(callDoc, {
       caller: me.uid,
       callee: curChat.pid,
-      callerName: me.displayName || me.email || $('my-name').textContent,
+      callerName: me.displayName || me.email || 'Пользователь',
       offer: { type: offerData.type, sdp: offerData.sdp },
       status: 'ringing'
     });
@@ -1253,9 +1257,8 @@ async function startCall() {
       if(!data) return;
       if(data.status === 'ended' || data.status === 'declined') { endCall(false); toast('Звонок завершен'); }
       if(!pc.currentRemoteDescription && data.answer) {
-        const answer = new RTCSessionDescription(data.answer);
-        pc.setRemoteDescription(answer);
-        $('call-sub').textContent = 'Соединение установлено';
+        pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        $('call-sub').textContent = 'В эфире';
       }
     });
 
@@ -1265,15 +1268,16 @@ async function startCall() {
       });
     });
   } catch (error) {
-    toast('Ошибка доступа к камере/микрофону');
+    console.error(error);
+    toast('Ошибка камеры/микрофона');
     endCall(false);
   }
 }
 
+// 4. ФУНКЦИЯ "ОТВЕТИТЬ" (Для того, кому звонят)
 async function answerCall() {
   closeModal('incoming-call-modal');
   openModal('call-modal');
-  $('call-title').textContent = $('inc-caller-name').textContent;
   $('call-sub').textContent = 'Соединение...';
 
   try {
@@ -1307,7 +1311,7 @@ async function answerCall() {
     const answerData = await pc.createAnswer();
     await pc.setLocalDescription(answerData);
 
-    await updateDoc(callDoc, { answer: { type: answerData.type, sdp: answerData.sdp }, status: 'connected' });
+    await updateDoc(callDoc, { answer: { type: answerData.type, sdp: answerData.sdp }, status: 'active' });
 
     onSnapshot(collection(callDoc, 'callerCandidates'), snapshot => {
       snapshot.docChanges().forEach(change => {
@@ -1322,18 +1326,19 @@ async function answerCall() {
       }
     });
   } catch (error) {
-    toast('Ошибка ответа на звонок');
+    console.error(error);
+    toast('Ошибка ответа');
     endCall();
   }
 }
 
+// 5. ФУНКЦИИ УПРАВЛЕНИЯ (Сброс, Микро, Камера)
 async function declineCall() {
   if(currentCallId) {
     try { await updateDoc(doc(db, 'calls', currentCallId), { status: 'declined' }); } catch(e){}
   }
   closeModal('incoming-call-modal');
   currentCallId = null;
-  if(callUnsub) { callUnsub(); callUnsub = null; }
 }
 
 async function endCall(updateDb = true) {
@@ -1343,12 +1348,10 @@ async function endCall(updateDb = true) {
   }
   if(pc) { pc.close(); pc = null; }
   if(localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-  $('local-video').srcObject = null;
+  
   const remVbox = $('remote-vbox');
-  if(remVbox) {
-    $('remote-video').srcObject = null;
-    remVbox.remove();
-  }
+  if(remVbox) remVbox.remove();
+  
   currentCallId = null;
   if(callUnsub) { callUnsub(); callUnsub = null; }
   $('btn-mic').classList.remove('on');
@@ -1356,27 +1359,22 @@ async function endCall(updateDb = true) {
 }
 
 function toggleMic() {
-  const btn = $('btn-mic');
-  if(localStream) {
-    const audioTrack = localStream.getAudioTracks()[0];
-    if(audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      btn.classList.toggle('on', audioTrack.enabled);
-    }
+  if(!localStream) return;
+  const track = localStream.getAudioTracks()[0];
+  if(track) {
+    track.enabled = !track.enabled;
+    $('btn-mic').classList.toggle('on', track.enabled);
   }
 }
 
 function toggleCam() {
-  const btn = $('btn-cam');
-  if(localStream) {
-    const videoTrack = localStream.getVideoTracks()[0];
-    if(videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      btn.classList.toggle('on', videoTrack.enabled);
-    }
+  if(!localStream) return;
+  const track = localStream.getVideoTracks()[0];
+  if(track) {
+    track.enabled = !track.enabled;
+    $('btn-cam').classList.toggle('on', track.enabled);
   }
 }
-
 // ==== ПРИВЯЗКА ФУНКЦИЙ К WINDOW ДЛЯ HTML ONCLICK ====
 window.setAuthMode = setAuthMode;
 window.doAuth = doAuth;
