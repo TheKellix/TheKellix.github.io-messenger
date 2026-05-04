@@ -166,6 +166,24 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);dis
 .inc-status { font-size: 14px; color: var(--accent2); margin-bottom: 30px; letter-spacing: 1px; }
 @keyframes ringPulse { 0% { box-shadow: 0 0 0 0px rgba(108, 92, 231, 0.4); } 100% { box-shadow: 0 0 0 30px rgba(108, 92, 231, 0); } }
 
+@media (max-width: 520px){
+  #incoming-call-modal .modal{
+    width:100vw !important;
+    max-width:100vw !important;
+    height:100svh;
+    max-height:100svh;
+    margin:0;
+    border-radius:0;
+    padding:22px 16px calc(18px + env(safe-area-inset-bottom));
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+  }
+  .inc-ava{width:120px;height:120px;font-size:42px;margin:0 auto 16px}
+  .inc-name{font-size:22px}
+  .inc-status{margin-bottom:18px}
+}
+
 .pinned-bar{padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--border);display:none;align-items:center;gap:10px;cursor:pointer}
 .pinned-bar.show{display:flex}
 .pinned-line{width:3px;height:30px;background:var(--accent);border-radius:2px;flex-shrink:0}
@@ -404,6 +422,7 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
           <div class="hbtn" onclick="openModal('search-chat-modal')" title="Поиск">🔍</div>
           <div class="hbtn" onclick="startCall()" title="Звонок">📞</div>
           <div class="hbtn" onclick="openPartnerProfile()" title="Профиль">👤</div>
+          <div class="hbtn" onclick="openChatCtxMenu(event)" title="Ещё">⋯</div>
         </div>
       </div>
       <div class="pinned-bar" id="pinned-bar">
@@ -677,6 +696,8 @@ window._fwdMid=null;
 let activeReactPickerEl=null;
 const handledIncomingCallIds=new Set();
 let callIceUnsubs=[];
+let draftsByChatId={};
+let mutedByChatId={};
 
 // WEBRTC CALL VARIABLES
 let pc = null;
@@ -696,6 +717,8 @@ let callModalNextSibling = null;
 let callRole = null; // 'caller' | 'callee'
 let iceRestartAttempts = 0;
 let pendingRemoteCandidates = [];
+let callConnTimer = null;
+let callStateTimer = null;
 
 function loadTurnConfig(){
   try{
@@ -765,6 +788,52 @@ function flushPendingCandidates(){
   });
 }
 
+function clearCallTimers(){
+  if(callConnTimer){clearTimeout(callConnTimer);callConnTimer=null;}
+  if(callStateTimer){clearInterval(callStateTimer);callStateTimer=null;}
+}
+
+function startCallDiagnostics(){
+  clearCallTimers();
+  callStateTimer=setInterval(()=>{
+    if(!pc) return;
+    const ice=pc.iceConnectionState||'—';
+    const conn=pc.connectionState||'—';
+    const sig=pc.signalingState||'—';
+    const base=$('call-sub')?.dataset?.baseText || $('call-sub')?.textContent || '';
+    const el=$('call-sub');
+    if(el) el.textContent=`${base} · ICE:${ice} · Conn:${conn} · Sig:${sig}`;
+  }, 900);
+}
+
+function setCallSub(text){
+  const el=$('call-sub');
+  if(!el) return;
+  el.dataset.baseText=text;
+  el.textContent=text;
+}
+
+function armConnectionTimeout(ms){
+  clearCallTimers();
+  callConnTimer=setTimeout(()=>{
+    if(!pc) return;
+    const ice=pc.iceConnectionState;
+    if(ice!=='connected' && ice!=='completed'){
+      restartIce();
+      // второй шанс: если не помогло — завершить
+      setTimeout(()=>{
+        if(!pc) return;
+        const ice2=pc.iceConnectionState;
+        if(ice2!=='connected' && ice2!=='completed'){
+          toast('Не удалось соединиться в этой сети. Часто нужен TURN-сервер.');
+          endCall(true);
+        }
+      }, 12000);
+    }
+  }, ms);
+  startCallDiagnostics();
+}
+
 if(location.protocol === 'file:') document.getElementById('proto-warning').style.display = 'block';
 
 const $=id=>document.getElementById(id);
@@ -787,6 +856,134 @@ function toast(msg) {
     t.classList.add('hide');
     setTimeout(() => t.remove(), 300);
   }, 3000);
+}
+
+async function copyText(text){
+  try{
+    await navigator.clipboard.writeText(String(text??''));
+    toast('Скопировано');
+  }catch(e){
+    try{
+      const ta=document.createElement('textarea');
+      ta.value=String(text??'');
+      ta.style.position='fixed';
+      ta.style.left='-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      toast('Скопировано');
+    }catch(err){
+      toast('Не удалось скопировать');
+    }
+  }
+}
+
+function loadDrafts(){
+  try{
+    const raw=localStorage.getItem('nx_drafts');
+    draftsByChatId=raw?JSON.parse(raw):{};
+  }catch(e){draftsByChatId={};}
+}
+function loadMuted(){
+  try{
+    const raw=localStorage.getItem('nx_mute');
+    mutedByChatId=raw?JSON.parse(raw):{};
+  }catch(e){mutedByChatId={};}
+}
+function setMuted(chatId,muted){
+  if(!chatId) return;
+  mutedByChatId[chatId]=!!muted;
+  try{localStorage.setItem('nx_mute',JSON.stringify(mutedByChatId));}catch(e){}
+  toast(muted?'Чат заглушен':'Чат снова со звуком');
+}
+function isMuted(chatId){
+  return !!mutedByChatId?.[chatId];
+}
+
+function downloadText(filename, text){
+  const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},0);
+}
+
+function exportCurrentChat(){
+  if(!curChat) return;
+  const data={
+    chatId: curChat.id,
+    name: curChat.name,
+    exportedAt: new Date().toISOString(),
+    messages: msgsCache
+  };
+  downloadText(`chat_${curChat.id}.json`, JSON.stringify(data,null,2));
+}
+
+async function clearCurrentChatForMe(){
+  if(!curChat) return;
+  if(!confirm('Скрыть все сообщения этого чата у себя?')) return;
+  try{
+    const col=collection(db,'chats',curChat.id,'messages');
+    const snap=await getDocs(query(col,orderBy('ts','desc'),limit(200)));
+    const batch=writeBatch(db);
+    snap.docs.forEach(d=>batch.update(d.ref,{hiddenFor:arrayUnion(me.uid)}));
+    await batch.commit();
+    toast('Скрыто (последние 200)');
+  }catch(e){
+    toast('Очистка: '+(e.message||e));
+  }
+}
+
+function openChatCtxMenu(ev){
+  ev?.stopPropagation?.();
+  if(!curChat) return;
+  closeMsgCtxMenu();
+  closeReactPicker();
+  const menu=document.createElement('div');
+  menu.id='msg-ctx-menu-pop';
+  menu.className='ctx-menu open';
+  const mk=(label,fn,cls='')=>{
+    const it=document.createElement('div');
+    it.className='ctx-item'+cls;
+    it.textContent=label;
+    it.onclick=e=>{
+      e.stopPropagation();
+      closeMsgCtxMenu();
+      fn();
+    };
+    menu.appendChild(it);
+  };
+  mk('⬇ Экспорт чата (JSON)',()=>exportCurrentChat());
+  mk(isMuted(curChat.id)?'🔔 Включить звук':'🔇 Заглушить чат',()=>setMuted(curChat.id,!isMuted(curChat.id)));
+  mk('🧹 Скрыть последние 200 у себя',()=>clearCurrentChatForMe());
+  document.body.appendChild(menu);
+  const r=ev?.currentTarget?.getBoundingClientRect?.()||{left:ev?.clientX||10,bottom:ev?.clientY||10};
+  const x=Math.min(window.innerWidth-(menu.offsetWidth||200)-8, Math.max(8, r.left));
+  const y=Math.min(window.innerHeight-(menu.offsetHeight||200)-8, Math.max(8, r.bottom+8));
+  menu.style.left=x+'px';
+  menu.style.top=y+'px';
+  setTimeout(()=>document.addEventListener('click',closeMsgCtxMenu,{once:true,capture:true}),0);
+}
+function saveDraft(chatId,text){
+  if(!chatId) return;
+  const v=String(text||'');
+  if(!v.trim()){
+    if(draftsByChatId[chatId]!=null) delete draftsByChatId[chatId];
+  }else{
+    draftsByChatId[chatId]=v.slice(0,5000);
+  }
+  try{localStorage.setItem('nx_drafts',JSON.stringify(draftsByChatId));}catch(e){}
+}
+function applyDraftToInput(chatId){
+  const el=$('msg-inp');
+  if(!el) return;
+  const v=(draftsByChatId?.[chatId]||'');
+  if(v && !el.innerText.trim()){
+    el.innerText=v;
+  }
 }
 
 function openModal(id) { $(id).classList.add('open'); }
@@ -879,6 +1076,7 @@ function cleanupSubs(){
   if(typingUnsub){typingUnsub();typingUnsub=null;}
   if(globalCallUnsub){globalCallUnsub();globalCallUnsub=null;}
   if(callUnsub){callUnsub();callUnsub=null;}
+  clearCallTimers();
   callIceUnsubs.forEach(u=>{try{u();}catch(e){}});callIceUnsubs=[];
   teardownCallMedia();
   presenceUnsubs.forEach(u=>u());presenceUnsubs.clear();
@@ -954,6 +1152,8 @@ async function initApp(){
   else if(udata.username) $('my-bio').textContent='@'+udata.username;
   else $('my-bio').textContent='● Онлайн';
   loadSettings();
+  loadDrafts();
+  loadMuted();
   setPresence(true);
   loadChats();
   buildEmoji();
@@ -1282,9 +1482,12 @@ async function openChat(id,d){
   
   document.querySelectorAll('.chat-item').forEach(x=>x.classList.toggle('active',x.dataset.chatId===id));
   cancelReply();
+  $('edit-bar')?.classList.remove('show');
+  editingId=null;
   markMyRead(id);
   loadMsgs(id);
   listenTyping(id);
+  applyDraftToInput(id);
 }
 
 function loadMsgs(id){
@@ -1434,6 +1637,11 @@ function openMsgCtxMenu(clientX,clientY,mid,m,isOwn){
   };
   mk('↩ Ответить',()=>startReplyTo(mid,m));
   mk('↪ Переслать',()=>openForwardModal(mid,m));
+  if((m.text||'').trim()) mk('📋 Копировать текст',()=>copyText(m.text||''));
+  mk('🔗 Копировать ID',()=>copyText(mid));
+  if(isOwn && !m.deleted && (m.text||'').trim()){
+    mk('✏️ Редактировать',()=>startEditMessage(mid,m));
+  }
   if(isOwn){
     mk('📌 Закрепить',()=>pinMessage(mid,m));
     mk('🗑 Удалить у себя',()=>deleteMsgForMe(mid));
@@ -1451,6 +1659,19 @@ function openMsgCtxMenu(clientX,clientY,mid,m,isOwn){
   menu.style.left=x+'px';
   menu.style.top=y+'px';
   setTimeout(()=>document.addEventListener('click',closeMsgCtxMenu,{once:true,capture:true}),0);
+}
+
+function startEditMessage(mid,m){
+  if(!curChat) return;
+  if(!mid || !m || m.deleted) return;
+  editingId=mid;
+  $('edit-bar')?.classList.add('show');
+  const inp=$('msg-inp');
+  if(inp){
+    inp.innerText=m.text||'';
+    inp.focus();
+    try{document.execCommand('selectAll',false,null);}catch(e){}
+  }
 }
 
 async function pinMessage(mid,m){
@@ -1660,6 +1881,27 @@ async function sendMsg(){
   const text=$('msg-inp').innerText.trim();
   if(!text||!curChat)return;
   $('msg-inp').innerText='';
+  saveDraft(curChat.id,'');
+
+  // edit existing
+  if(editingId){
+    const id=editingId;
+    editingId=null;
+    $('edit-bar')?.classList.remove('show');
+    try{
+      await updateDoc(doc(db,'chats',curChat.id,'messages',id),{
+        text,
+        editedAt: serverTimestamp(),
+        deleted:false
+      });
+      await bumpChatPreview('✏️ '+text);
+      return;
+    }catch(e){
+      toast('Редактирование: '+(e.message||e));
+      return;
+    }
+  }
+
   const payload={from:me.uid,text,ts:serverTimestamp(),readBy:[me.uid]};
   if(replyTo?.id){
     payload.replyTo={
@@ -1676,6 +1918,9 @@ async function sendMsg(){
 function onKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}}
 
 function onType(){
+  if(curChat){
+    saveDraft(curChat.id,$('msg-inp')?.innerText||'');
+  }
   if(!curChat||!settings.typing)return;
   const nm=me.displayName||(me.email?me.email.split('@')[0]:'');
   setDoc(doc(db,'typing',curChat.id),{[me.uid]:{name:nm,ts:serverTimestamp()}},{merge:true});
@@ -1809,6 +2054,7 @@ function resetCallVideoGrid(){
 }
 
 function teardownCallMedia(){
+  clearCallTimers();
   callIceUnsubs.forEach(u=>{try{u();}catch(e){}});
   callIceUnsubs=[];
   if(screenShareStream){
@@ -2089,7 +2335,7 @@ async function restartIce(){
   iceRestartAttempts++;
   try{
     if(callRole==='caller'){
-      $('call-sub').textContent='Переподключение…';
+      setCallSub('Переподключение…');
       const offer=await pc.createOffer({iceRestart:true});
       await pc.setLocalDescription(offer);
       await updateDoc(currentCallDocRef,{
@@ -2099,7 +2345,7 @@ async function restartIce(){
       });
     }else if(callRole==='callee'){
       // callee сам по себе не может навязать рестарт — ждём обновлённый offer от caller
-      $('call-sub').textContent='Переподключение…';
+      setCallSub('Переподключение…');
     }
   }catch(e){
     console.warn('ICE restart',e);
@@ -2112,7 +2358,7 @@ function bindPcStateHandlers(){
     const st=pc.iceConnectionState;
     if(st==='connected' || st==='completed'){
       iceRestartAttempts=0;
-      if($('call-sub')?.textContent) $('call-sub').textContent='В эфире';
+      setCallSub('В эфире');
       return;
     }
     if(st==='failed'){
@@ -2172,7 +2418,7 @@ async function startCall(){
 
   $('call-title').textContent=curChat.name;
   openModal('call-modal');
-  $('call-sub').textContent='Подключение медиа…';
+  setCallSub('Подключение медиа…');
 
   let callerDisplay=me.displayName||me.email||'Пользователь';
   try{
@@ -2241,7 +2487,8 @@ async function startCall(){
       status:'ringing'
     });
 
-    $('call-sub').textContent='Вызов…';
+    setCallSub('Вызов…');
+    armConnectionTimeout(22000);
 
     callUnsub=onSnapshot(callDoc,snapshot=>{
       const data=snapshot.data();
@@ -2253,7 +2500,7 @@ async function startCall(){
       }
       if(data.answer&&!pc.currentRemoteDescription){
         pc.setRemoteDescription(new RTCSessionDescription(data.answer)).then(()=>{
-          $('call-sub').textContent='В эфире';
+          setCallSub('В эфире');
           flushPendingCandidates();
         }).catch(e=>console.warn('setRemoteDescription',e));
       }
@@ -2280,7 +2527,7 @@ async function answerCall(){
   resetCallVideoGrid();
 
   openModal('call-modal');
-  $('call-sub').textContent='Соединение…';
+  setCallSub('Соединение…');
 
   try{
     const callDoc=doc(db,'calls',rid);
@@ -2342,7 +2589,8 @@ async function answerCall(){
     await updateDoc(callDoc,{answer:{type:answerData.type,sdp:answerData.sdp},status:'active'});
     currentCallId=rid;
 
-    $('call-sub').textContent='В эфире';
+    setCallSub('В эфире');
+    armConnectionTimeout(22000);
     bindCallVideoHandlers();
     setCallFocus('remote');
     updateRemoteLabel();
@@ -2362,12 +2610,12 @@ async function answerCall(){
       if(d.offer && pc && pc.currentRemoteDescription && d.offer.sdp && d.offer.sdp!==pc.currentRemoteDescription.sdp){
         (async()=>{
           try{
-            $('call-sub').textContent='Переподключение…';
+            setCallSub('Переподключение…');
             await pc.setRemoteDescription(new RTCSessionDescription(d.offer));
             const a=await pc.createAnswer();
             await pc.setLocalDescription(a);
             await updateDoc(callDoc,{answer:{type:a.type,sdp:a.sdp},status:'active',iceRestartAckAt:Date.now()});
-            $('call-sub').textContent='В эфире';
+            setCallSub('В эфире');
             flushPendingCandidates();
           }catch(e){console.warn('offer update',e);}
         })();
@@ -2403,6 +2651,7 @@ async function endCall(updateDb=true){
   callRole=null;
   iceRestartAttempts=0;
   pendingRemoteCandidates=[];
+  clearCallTimers();
   if(callUnsub){callUnsub();callUnsub=null;}
   teardownCallMedia();
   setCallFloatOpen(false);
@@ -2470,7 +2719,8 @@ window.restoreCall = restoreCall;
 window.unpin = unpin;
 window.cancelReply = cancelReply;
 window.searchMessages = searchMessages;
-window.cancelEdit = ()=>{ $('edit-bar').classList.remove('show'); editingId=null; };
+window.openChatCtxMenu = openChatCtxMenu;
+window.cancelEdit = ()=>{ $('edit-bar').classList.remove('show'); editingId=null; if(curChat)saveDraft(curChat.id,$('msg-inp')?.innerText||''); };
 
 </script>
 </body>
