@@ -537,6 +537,28 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
       <div class="si"><div class="si-left"><div class="si-ico" style="background:#00b89420">🟢</div><div><div class="si-text">Статус онлайн</div><div class="si-sub">Показывать когда в сети</div></div></div><div class="toggle on" id="tgl-online" onclick="toggleSetting('online',this)"></div></div>
       <div class="si"><div class="si-left"><div class="si-ico" style="background:#fdcb6e20">✏️</div><div><div class="si-text">Показывать "печатает"</div></div></div><div class="toggle on" id="tgl-typing" onclick="toggleSetting('typing',this)"></div></div>
     </div>
+    <div class="settings-section">
+      <div class="settings-label">Звонки (TURN)</div>
+      <div style="font-size:12px;color:var(--muted);margin:-2px 0 10px">
+        Чтобы звонки работали через разные Wi‑Fi/операторов, нужен TURN‑сервер. Впишите данные вашего TURN (например, coturn на VPS).
+      </div>
+      <div class="field">
+        <label>TURN URL</label>
+        <input type="text" id="turn-url" placeholder="turn:your-domain.com:3478?transport=udp">
+      </div>
+      <div class="field">
+        <label>TURN username</label>
+        <input type="text" id="turn-user" placeholder="username">
+      </div>
+      <div class="field">
+        <label>TURN password</label>
+        <input type="password" id="turn-pass" placeholder="password">
+      </div>
+      <div class="mactions" style="margin-top:10px">
+        <button class="bcn" onclick="clearTurnConfig()">Сбросить TURN</button>
+        <button class="btn btn-primary" style="flex:1" onclick="saveTurnConfig()">Сохранить TURN</button>
+      </div>
+    </div>
     <div class="mactions"><button class="bcn" onclick="closeModal('settings-modal')">Закрыть</button></div>
   </div>
 </div>
@@ -674,6 +696,40 @@ let callModalNextSibling = null;
 let callRole = null; // 'caller' | 'callee'
 let iceRestartAttempts = 0;
 let pendingRemoteCandidates = [];
+
+function loadTurnConfig(){
+  try{
+    const raw=localStorage.getItem('nx_turn');
+    const cfg=raw?JSON.parse(raw):null;
+    const url=(cfg?.url||'').trim();
+    const user=(cfg?.user||'').trim();
+    const pass=(cfg?.pass||'').trim();
+    window.TURN_URL=url;
+    window.TURN_USER=user;
+    window.TURN_PASS=pass;
+    const uEl=$('turn-url'); if(uEl)uEl.value=url;
+    const usEl=$('turn-user'); if(usEl)usEl.value=user;
+    const pEl=$('turn-pass'); if(pEl)pEl.value=pass;
+  }catch(e){}
+}
+
+function saveTurnConfig(){
+  const url=($('turn-url')?.value||'').trim();
+  const user=($('turn-user')?.value||'').trim();
+  const pass=($('turn-pass')?.value||'').trim();
+  localStorage.setItem('nx_turn',JSON.stringify({url,user,pass}));
+  window.TURN_URL=url; window.TURN_USER=user; window.TURN_PASS=pass;
+  toast(url&&user&&pass?'TURN сохранён':'TURN сохранён (но не заполнены все поля)');
+}
+
+function clearTurnConfig(){
+  try{localStorage.removeItem('nx_turn');}catch(e){}
+  window.TURN_URL=''; window.TURN_USER=''; window.TURN_PASS='';
+  if($('turn-url')) $('turn-url').value='';
+  if($('turn-user')) $('turn-user').value='';
+  if($('turn-pass')) $('turn-pass').value='';
+  toast('TURN сброшен');
+}
 
 function getRtcConfig(){
   // TURN нужен, чтобы звонки работали через разные сети/операторов (симметричный NAT).
@@ -1087,6 +1143,7 @@ function loadSettings(){
   ['notif','read','online','typing'].forEach(k=>{const t=$('tgl-'+k);if(t)t.className='toggle'+(settings[k]?' on':'');});
   const th=localStorage.getItem('nx_th')||'purple';
   document.body.className='theme-'+th;
+  loadTurnConfig();
 }
 function toggleSetting(k,el){settings[k]=!settings[k];el.className='toggle'+(settings[k]?' on':'');localStorage.setItem('nx_s',JSON.stringify(settings));}
 function setTheme(t){document.body.className='theme-'+t;localStorage.setItem('nx_th',t);toast('Тема изменена');}
@@ -2387,6 +2444,8 @@ window.filterChats = filterChats;
 window.setSTab = setSTab;
 window.toggleSetting = toggleSetting;
 window.setTheme = setTheme;
+window.saveTurnConfig = saveTurnConfig;
+window.clearTurnConfig = clearTurnConfig;
 window.openPartnerProfile = openPartnerProfile;
 window.openGroupModal = openGroupModal;
 window.createGroup = createGroup;
