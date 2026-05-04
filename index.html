@@ -100,6 +100,7 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);dis
 .call-btn.danger{background:#e1705520;border-color:#e17055;color:#e17055}
 .call-btn.danger:hover{background:#e1705540;}
 .call-btn.on{border-color:var(--accent2);color:var(--accent2);background:#00cec910;}
+.call-btn.share-on{border-color:#a29bfe;color:#a29bfe;background:#6c5ce720;}
 .call-btn.accept-btn{background:#00b894; color:#fff; border-color:#00b894;}
 .call-btn.accept-btn:hover{background:#00a082;}
 .call-mini{font-size:13px;color:var(--muted);text-align:center;margin-bottom:16px;}
@@ -425,8 +426,19 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
     <h3>Мой профиль</h3>
     <div class="pm-ava" id="mpm-ava">👤</div>
     <div class="pm-info"><div class="pm-name" id="mpm-name">—</div><div class="pm-email" id="mpm-email">—</div></div>
+    <div class="field"><label>Отображаемое имя</label><input type="text" id="name-inp" placeholder="Как вас видят другие"></div>
+    <div class="field"><label>Телефон</label><input type="tel" id="phone-inp" placeholder="+7 …"></div>
+    <div class="field"><label>День рождения</label><input type="date" id="birthday-inp"></div>
     <div class="field"><label>Username (уникальный)</label><input type="text" id="username-inp" placeholder="@nickname"></div>
     <div class="field"><label>Статус / Био</label><input type="text" id="bio-inp" placeholder="Что нового?"></div>
+    <div class="settings-label">Аватар</div>
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--text2)">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="avatar-src" value="auto"> Авто: своё фото, иначе из Google</label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="avatar-src" value="custom"> Только загруженное фото</label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="avatar-src" value="google"> Только фото из Google</label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="avatar-src" value="initials"> Без фото (инициалы)</label>
+    </div>
+    <button type="button" class="bcn" style="width:100%;margin-top:6px" onclick="document.getElementById('fi-ava').click()">📷 Загрузить своё фото</button>
     <div class="settings-label">Тема</div>
     <div class="theme-swatches">
       <div class="swatch" onclick="setTheme('purple')" style="background:linear-gradient(135deg,#6c5ce7,#a29bfe)"></div>
@@ -537,7 +549,8 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
     <div class="call-bar">
       <button class="call-btn" id="btn-mic" onclick="toggleMic()" title="Микрофон">🎙</button>
       <button class="call-btn" id="btn-cam" onclick="toggleCam()" title="Камера">📷</button>
-      <button class="call-btn" id="btn-share" onclick="toggleScreenShare()" title="Экран">🖥</button>
+      <button class="call-btn" id="btn-flip" onclick="flipCamera()" title="Переключить камеру (фронт/тыл)">🔄</button>
+      <button class="call-btn" id="btn-share" onclick="toggleScreenShare()" title="Демонстрация экрана">🖥</button>
       <button class="call-btn danger" onclick="endCall()" title="Завершить">⎋</button>
     </div>
   </div>
@@ -581,6 +594,8 @@ let callUnsub = null;
 let globalCallUnsub = null;
 let localStream = null;
 let remoteStream = null;
+let screenShareStream = null;
+let cameraFacing = 'user';
 const servers = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
 
 if(location.protocol === 'file:') document.getElementById('proto-warning').style.display = 'block';
@@ -633,16 +648,60 @@ function withTimeout(promise, ms, label){
   return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
 }
 
+function effectiveAvatarUrl(udata,authUser){
+  if(!udata)udata={};
+  const customPh=(udata.photoURL||'').trim();
+  const googlePh=(udata.googlePhotoURL||'').trim()||(authUser?.photoURL||'').trim();
+  const src=udata.avatarSource||'auto';
+  if(src==='initials')return'';
+  if(src==='google'){
+    if(googlePh&&safeUrl(googlePh))return googlePh;
+    return'';
+  }
+  if(src==='custom'){
+    if(customPh&&safeUrl(customPh))return customPh;
+    return'';
+  }
+  if(customPh&&safeUrl(customPh))return customPh;
+  if(googlePh&&safeUrl(googlePh))return googlePh;
+  return'';
+}
+
+function paintAvatarEl(el,photoUrl,dispName,uid){
+  const col=uc(uid);
+  if(photoUrl&&safeUrl(photoUrl)){
+    el.textContent='';
+    el.style.backgroundImage=`url('${photoUrl}')`;
+    el.style.backgroundSize='cover';
+    el.style.backgroundPosition='center';
+  }else{
+    el.textContent=ini(dispName);
+    el.style.background=`linear-gradient(135deg,${col},${COLORS[(uid.charCodeAt(1)||0)%COLORS.length]})`;
+    el.style.backgroundImage='';
+  }
+}
+
 async function ensureUserDoc(u){
   if(!u)return;
   const r=doc(db,'users',u.uid);
   const snap=await getDoc(r);
   const email=(u.email||'').toLowerCase();
   const name=u.displayName||(email?email.split('@')[0]:'Пользователь');
+  const gPhoto=(u.photoURL||'').trim();
   if(!snap.exists()){
-    await setDoc(r,{uid:u.uid,email:email||'',name,username:'',bio:'',photoURL:u.photoURL||'',createdAt:serverTimestamp()});
+    await setDoc(r,{
+      uid:u.uid,email:email||'',name,username:'',bio:'',
+      photoURL:'',googlePhotoURL:gPhoto,avatarSource:'auto',
+      phone:'',birthday:'',
+      createdAt:serverTimestamp(),
+    });
   }else{
-    await setDoc(r,{email:email||snap.data().email,name:name||snap.data().name,photoURL:(u.photoURL||snap.data().photoURL||'')},{merge:true});
+    const prev=snap.data();
+    await setDoc(r,{
+      email:email||prev.email,
+      name:name||prev.name,
+      googlePhotoURL:gPhoto||prev.googlePhotoURL||'',
+    },{merge:true});
   }
 }
 
@@ -721,19 +780,9 @@ async function initApp(){
   const ud=await getDoc(doc(db,'users',me.uid));
   const udata=ud.exists()?ud.data():{name:me.displayName||'Пользователь',email:me.email,photoURL:''};
   const dispName=udata.name||me.displayName||(me.email?me.email.split('@')[0]:'—');
-  myPhotoURL=udata.photoURL||me.photoURL||'';
+  myPhotoURL=effectiveAvatarUrl(udata,me);
   $('my-name').textContent=dispName;
-  const av=$('my-ava'),col=uc(me.uid);
-  if(myPhotoURL && safeUrl(myPhotoURL)){
-    av.textContent='';
-    av.style.backgroundImage=`url('${myPhotoURL}')`;
-    av.style.backgroundSize='cover';
-    av.style.backgroundPosition='center';
-  }else{
-    av.textContent=ini(dispName);
-    av.style.background=`linear-gradient(135deg,${col},${COLORS[(me.uid.charCodeAt(1)||0)%COLORS.length]})`;
-    av.style.backgroundImage='';
-  }
+  paintAvatarEl($('my-ava'),myPhotoURL,dispName,me.uid);
   if(udata.bio) $('my-bio').textContent=udata.bio;
   else if(udata.username) $('my-bio').textContent='@'+udata.username;
   else $('my-bio').textContent='● Онлайн';
@@ -745,11 +794,16 @@ async function initApp(){
 }
 
 async function saveProfile(){
+  const nameVal=$('name-inp').value.trim();
+  const phone=$('phone-inp').value.trim();
+  const birthday=$('birthday-inp').value||'';
   const bio=$('bio-inp').value.trim();
   let username=$('username-inp').value.trim().replace(/^@+/,'').toLowerCase();
+  const avatarSrc=document.querySelector('input[name="avatar-src"]:checked')?.value||'auto';
   const err=$('mpm-err');
   err.style.display='none';
   if(username&&username.length<3){err.textContent='Юзернейм минимум 3 символа';err.style.display='block';return;}
+  if(phone&&phone.length>32){err.textContent='Телефон слишком длинный';err.style.display='block';return;}
   try{
     if(username){
       const snap=await getDocs(query(collection(db,'users'),where('username','==',username)));
@@ -757,7 +811,16 @@ async function saveProfile(){
       snap.forEach(d=>{if(d.id!==me.uid)taken=true;});
       if(taken){err.textContent='Юзернейм занят';err.style.display='block';return;}
     }
-    await setDoc(doc(db,'users',me.uid),{bio,username},{merge:true});
+    const payload={bio,username,phone,birthday,avatarSource:avatarSrc};
+    if(nameVal)payload.name=nameVal;
+    await setDoc(doc(db,'users',me.uid),payload,{merge:true});
+    if(nameVal)try{await updateProfile(me,{displayName:nameVal});}catch(e){}
+    const udFresh=await getDoc(doc(db,'users',me.uid));
+    const udata=udFresh.exists()?udFresh.data():{};
+    const dispName=udata.name||me.displayName||(me.email?me.email.split('@')[0]:'—');
+    myPhotoURL=effectiveAvatarUrl(udata,me);
+    $('my-name').textContent=dispName;
+    paintAvatarEl($('my-ava'),myPhotoURL,dispName,me.uid);
     $('my-bio').textContent=username?'@'+username:(bio||'● Онлайн');
     toast('Профиль обновлён');
     closeModal('my-profile-modal');
@@ -805,16 +868,21 @@ function openMyProfile(){
     if(s.exists()){
       const d=s.data();
       $('mpm-name').textContent=d.name||'—';
-      $('mpm-email').textContent=d.email||'—';
+      $('mpm-email').textContent=d.email||me.email||'—';
+      $('name-inp').value=d.name||me.displayName||'';
+      $('phone-inp').value=d.phone||'';
+      $('birthday-inp').value=d.birthday||'';
       $('bio-inp').value=d.bio||'';
       $('username-inp').value=d.username?'@'+d.username:'';
-      const col=uc(me.uid),av=$('mpm-ava');
-      const purl=d.photoURL||myPhotoURL||'';
-      if(purl && safeUrl(purl)){
-        av.textContent=''; av.style.backgroundImage=`url('${purl}')`; av.style.backgroundSize='cover';
-      }else{
-        av.textContent=ini(d.name); av.style.background=`linear-gradient(135deg,${col},#a29bfe)`; av.style.backgroundImage='';
+      const src=d.avatarSource||'auto';
+      document.querySelectorAll('input[name="avatar-src"]').forEach(r=>{r.checked=r.value===src;});
+      if(![...document.querySelectorAll('input[name="avatar-src"]')].some(r=>r.checked)){
+        const auto=document.querySelector('input[name="avatar-src"][value="auto"]');
+        if(auto)auto.checked=true;
       }
+      const av=$('mpm-ava');
+      const disp=d.name||me.displayName||'—';
+      paintAvatarEl(av,effectiveAvatarUrl(d,me),disp,me.uid);
     }
   });
   openModal('my-profile-modal');
@@ -830,9 +898,13 @@ async function onAvatarFile(ev){
     await uploadBytes(sr,f);
     const url=await getDownloadURL(sr);
     myPhotoURL=url;
-    await setDoc(doc(db,'users',me.uid),{photoURL:url},{merge:true});
-    const av=$('my-ava');
-    av.textContent=''; av.style.backgroundImage=`url('${url}')`; av.style.backgroundSize='cover';
+    await setDoc(doc(db,'users',me.uid),{photoURL:url,avatarSource:'custom'},{merge:true});
+    const ud=await getDoc(doc(db,'users',me.uid));
+    const d=ud.exists()?ud.data():{};
+    const dispName=d.name||me.displayName||(me.email?me.email.split('@')[0]:'—');
+    myPhotoURL=effectiveAvatarUrl(d,me);
+    paintAvatarEl($('my-ava'),myPhotoURL,dispName,me.uid);
+    document.querySelectorAll('input[name="avatar-src"]').forEach(r=>{r.checked=r.value==='custom';});
     toast('Аватар обновлён');
   }catch(e){toast('Аватар: '+e.message);}
 }
@@ -842,11 +914,17 @@ async function openPartnerProfile(){
   if(curChat.isGroup){toast('Это группа');return;}
   const pu=await getDoc(doc(db,'users',curChat.pid));
   const p=pu.exists()?pu.data():{};
-  $('pm-ava').textContent=ini(p.name||curChat.name);
-  $('pm-ava').style.background=`linear-gradient(135deg,${uc(curChat.pid)},#a29bfe)`;
-  $('pm-name').textContent=p.name||curChat.name;
+  const disp=p.name||curChat.name;
+  const pUrl=effectiveAvatarUrl(p,null);
+  paintAvatarEl($('pm-ava'),pUrl,disp,curChat.pid);
+  $('pm-name').textContent=disp;
   $('pm-email').textContent=p.email||curChat.email||'—';
-  $('pm-bio-text').textContent=p.bio||(p.username?'@'+p.username:'');
+  const extra=[];
+  if(p.phone)extra.push('📞 '+p.phone);
+  if(p.birthday)extra.push('🎂 '+p.birthday);
+  const bioEl=$('pm-bio-text');
+  bioEl.style.whiteSpace='pre-line';
+  bioEl.textContent=[p.bio||(p.username?'@'+p.username:''),extra.join(' · ')].filter(Boolean).join('\n')||'';
   openModal('profile-modal');
 }
 
@@ -1563,12 +1641,102 @@ function resetCallVideoGrid(){
 function teardownCallMedia(){
   callIceUnsubs.forEach(u=>{try{u();}catch(e){}});
   callIceUnsubs=[];
+  if(screenShareStream){
+    try{screenShareStream.getTracks().forEach(t=>t.stop());}catch(e){}
+    screenShareStream=null;
+  }
   if(pc){try{pc.close();}catch(e){} pc=null;}
   if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
   remoteStream=null;
   $('remote-vbox')?.remove();
   $('btn-mic')?.classList.remove('on');
   $('btn-cam')?.classList.remove('on');
+  $('btn-share')?.classList.remove('on','share-on');
+  const ll=$('local-label');
+  if(ll)ll.textContent='Вы';
+  cameraFacing='user';
+}
+
+function getVideoSender(){
+  if(!pc)return null;
+  return pc.getSenders().find(s=>s.track&&s.track.kind==='video')||null;
+}
+
+async function stopScreenShareIfAny(){
+  if(!screenShareStream)return;
+  try{screenShareStream.getTracks().forEach(t=>t.stop());}catch(e){}
+  screenShareStream=null;
+  const vSender=getVideoSender();
+  const cam=localStream?.getVideoTracks()[0];
+  if(pc&&vSender&&cam){
+    try{await vSender.replaceTrack(cam);}catch(e){console.warn(e);}
+  }
+  if($('local-video'))$('local-video').srcObject=localStream;
+  $('btn-share')?.classList.remove('on','share-on');
+  const ll=$('local-label');
+  if(ll)ll.textContent='Вы';
+}
+
+async function toggleScreenShare(){
+  if(!pc||!localStream){toast('Сначала установите соединение');return;}
+  if(screenShareStream){
+    await stopScreenShareIfAny();
+    return;
+  }
+  try{
+    screenShareStream=await navigator.mediaDevices.getDisplayMedia({
+      video:{cursor:'always'},
+      audio:false,
+    });
+    const screenTrack=screenShareStream.getVideoTracks()[0];
+    if(!screenTrack){toast('Не удалось захватить экран');return;}
+    const vSender=getVideoSender();
+    if(!vSender){toast('Видеоканал недоступен');return;}
+    await vSender.replaceTrack(screenTrack);
+    const aud=localStream.getAudioTracks()[0];
+    const mix=new MediaStream([screenTrack]);
+    if(aud)mix.addTrack(aud);
+    $('local-video').srcObject=mix;
+    screenTrack.onended=()=>{stopScreenShareIfAny();};
+    $('btn-share').classList.add('on','share-on');
+    const ll=$('local-label');
+    if(ll)ll.textContent='Демонстрация';
+  }catch(e){
+    if(e?.name!=='NotAllowedError'&&e?.name!=='AbortError')
+      toast('Демонстрация: '+(e.message||e));
+  }
+}
+
+async function flipCamera(){
+  if(!pc||!localStream){toast('Нет активного звонка');return;}
+  if(screenShareStream){toast('Сначала выключите демонстрацию');return;}
+  const oldV=localStream.getVideoTracks()[0];
+  if(!oldV){toast('Камера не найдена');return;}
+  cameraFacing=cameraFacing==='user'?'environment':'user';
+  try{
+    const fresh=await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{facingMode:{ideal:cameraFacing}},
+    });
+    const newVt=fresh.getVideoTracks()[0];
+    if(!newVt)throw new Error('Нет видеотрека');
+    const vSender=getVideoSender();
+    if(vSender)await vSender.replaceTrack(newVt);
+    oldV.stop();
+    if(typeof localStream.removeTrack==='function'){
+      localStream.removeTrack(oldV);
+      localStream.addTrack(newVt);
+    }else{
+      const nx=new MediaStream();
+      localStream.getAudioTracks().forEach(t=>nx.addTrack(t));
+      nx.addTrack(newVt);
+      localStream=nx;
+    }
+    $('local-video').srcObject=localStream;
+  }catch(e){
+    cameraFacing=cameraFacing==='user'?'environment':'user';
+    toast('Переключение камеры: '+(e.message||e));
+  }
 }
 
 function watchIceCollection(colRef){
@@ -1868,7 +2036,8 @@ window.answerCall = answerCall;
 window.declineCall = declineCall;
 window.toggleMic = toggleMic;
 window.toggleCam = toggleCam;
-window.toggleScreenShare = () => toast("Показ экрана в разработке");
+window.toggleScreenShare = toggleScreenShare;
+window.flipCamera = flipCamera;
 window.unpin = unpin;
 window.cancelReply = cancelReply;
 window.searchMessages = searchMessages;
