@@ -90,7 +90,13 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);dis
 .ch-actions{display:flex;gap:6px;position:relative}
 
 /* CALL STYLES */
-.video-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.video-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;position:relative}
+.video-grid.focus-remote #remote-vbox{grid-column:1/-1;grid-row:1/-1;min-height:420px}
+.video-grid.focus-remote #local-vbox{position:absolute;right:12px;bottom:12px;width:220px;height:140px;min-height:unset;z-index:5;box-shadow:0 20px 60px #000a}
+.video-grid.focus-local #local-vbox{grid-column:1/-1;grid-row:1/-1;min-height:420px;position:relative}
+.video-grid.focus-local #remote-vbox{position:absolute;right:12px;bottom:12px;width:220px;height:140px;min-height:unset;z-index:5;box-shadow:0 20px 60px #000a}
+.vbox{cursor:pointer}
+.vbox:active{transform:scale(.995)}
 .vbox{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;position:relative;min-height:240px;display:flex;align-items:center;justify-content:center;}
 .vbox video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
 .vlabel{position:absolute;left:10px;bottom:10px;background:#0008;color:#fff;padding:4px 8px;border-radius:10px;font-size:11px}
@@ -551,6 +557,7 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
       <button class="call-btn" id="btn-cam" onclick="toggleCam()" title="Камера">📷</button>
       <button class="call-btn" id="btn-flip" onclick="flipCamera()" title="Переключить камеру (фронт/тыл)">🔄</button>
       <button class="call-btn" id="btn-share" onclick="toggleScreenShare()" title="Демонстрация экрана">🖥</button>
+      <button class="call-btn" id="btn-focus" onclick="toggleCallFocus()" title="Собеседник на весь экран">⛶</button>
       <button class="call-btn danger" onclick="endCall()" title="Завершить">⎋</button>
     </div>
   </div>
@@ -596,6 +603,7 @@ let localStream = null;
 let remoteStream = null;
 let screenShareStream = null;
 let cameraFacing = 'user';
+let callFocus = 'remote';
 const servers = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
 
 if(location.protocol === 'file:') document.getElementById('proto-warning').style.display = 'block';
@@ -1636,6 +1644,8 @@ function searchMessages(){
 
 function resetCallVideoGrid(){
   $('video-grid').innerHTML='<div class="vbox" id="local-vbox"><video id="local-video" autoplay muted playsinline></video><div class="vlabel" id="local-label">Вы</div></div>';
+  $('video-grid').classList.remove('focus-remote','focus-local');
+  bindCallVideoHandlers();
 }
 
 function teardownCallMedia(){
@@ -1652,9 +1662,70 @@ function teardownCallMedia(){
   $('btn-mic')?.classList.remove('on');
   $('btn-cam')?.classList.remove('on');
   $('btn-share')?.classList.remove('on','share-on');
+  $('btn-focus')?.classList.remove('on');
   const ll=$('local-label');
   if(ll)ll.textContent='Вы';
   cameraFacing='user';
+  callFocus='remote';
+  $('video-grid')?.classList.remove('focus-remote','focus-local');
+}
+
+function setCallFocus(which){
+  const grid=$('video-grid');
+  if(!grid)return;
+  const hasRemote=!!$('remote-vbox');
+  if(which==='remote'&&!hasRemote)which='local';
+  if(which==='local')grid.classList.add('focus-local'); else grid.classList.remove('focus-local');
+  if(which==='remote')grid.classList.add('focus-remote'); else grid.classList.remove('focus-remote');
+  callFocus=which;
+  const btn=$('btn-focus');
+  if(btn)btn.classList.toggle('on',which==='remote');
+}
+
+function toggleCallFocus(){
+  if(!$('call-modal')?.classList.contains('open'))return;
+  if(callFocus==='remote')setCallFocus('local'); else setCallFocus('remote');
+}
+
+function toggleFullscreen(el){
+  if(!el)return;
+  try{
+    if(document.fullscreenElement)document.exitFullscreen();
+    else el.requestFullscreen?.();
+  }catch(e){}
+}
+
+function guessIsScreenTrack(track){
+  try{
+    const s=track?.getSettings?.()||{};
+    return !!s.displaySurface || (typeof track?.label==='string' && track.label.toLowerCase().includes('screen'));
+  }catch(e){return false;}
+}
+
+function updateRemoteLabel(){
+  const lab=$('remote-label');
+  const rv=$('remote-video');
+  if(!lab||!rv)return;
+  const t=rv.srcObject?.getVideoTracks?.()?.[0];
+  if(t&&guessIsScreenTrack(t))lab.textContent='Экран'; else lab.textContent=curChat?.name||'Собеседник';
+}
+
+function bindCallVideoHandlers(){
+  const lvb=$('local-vbox');
+  const rvb=$('remote-vbox');
+  const lv=$('local-video');
+  const rv=$('remote-video');
+
+  if(lvb){
+    lvb.onclick=e=>{e.stopPropagation();setCallFocus('local');};
+    lvb.ondblclick=e=>{e.stopPropagation();toggleFullscreen(lvb);};
+  }
+  if(rvb){
+    rvb.onclick=e=>{e.stopPropagation();setCallFocus('remote');};
+    rvb.ondblclick=e=>{e.stopPropagation();toggleFullscreen(rvb);};
+  }
+  if(lv)lv.onclick=e=>e.stopPropagation();
+  if(rv)rv.onclick=e=>e.stopPropagation();
 }
 
 function getVideoSender(){
@@ -1838,6 +1909,7 @@ async function startCall(){
         const has=remoteStream.getTracks().some(t=>t.id===track.id);
         if(!has)remoteStream.addTrack(track);
       });
+      updateRemoteLabel();
     };
 
     const callDoc=doc(collection(db,'calls'));
@@ -1878,6 +1950,8 @@ async function startCall(){
     });
 
     watchIceCollection(answerCandidates);
+    bindCallVideoHandlers();
+    setCallFocus('remote');
   }catch(error){
     console.error(error);
     toast('Ошибка камеры/микрофона');
@@ -1920,6 +1994,7 @@ async function answerCall(){
     vid.playsInline=true;
     const lab=document.createElement('div');
     lab.className='vlabel';
+    lab.id='remote-label';
     lab.textContent='Собеседник';
     rv.appendChild(vid);
     rv.appendChild(lab);
@@ -1932,6 +2007,7 @@ async function answerCall(){
         const has=remoteStream.getTracks().some(t=>t.id===track.id);
         if(!has)remoteStream.addTrack(track);
       });
+      updateRemoteLabel();
     };
 
     const answerCandidates=collection(callDoc,'calleeCandidates');
@@ -1949,6 +2025,9 @@ async function answerCall(){
     currentCallId=rid;
 
     $('call-sub').textContent='В эфире';
+    bindCallVideoHandlers();
+    setCallFocus('remote');
+    updateRemoteLabel();
 
     callUnsub=onSnapshot(callDoc,snapshot=>{
       if(!snapshot.exists())return;
@@ -2038,6 +2117,7 @@ window.toggleMic = toggleMic;
 window.toggleCam = toggleCam;
 window.toggleScreenShare = toggleScreenShare;
 window.flipCamera = flipCamera;
+window.toggleCallFocus = toggleCallFocus;
 window.unpin = unpin;
 window.cancelReply = cancelReply;
 window.searchMessages = searchMessages;
