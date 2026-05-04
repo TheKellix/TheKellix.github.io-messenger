@@ -124,6 +124,41 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);dis
 .call-btn.accept-btn:hover{background:#00a082;}
 .call-mini{font-size:13px;color:var(--muted);text-align:center;margin-bottom:16px;}
 
+/* Mobile call UI polish */
+@media (max-width: 520px){
+  #call-modal .modal{
+    width:100vw !important;
+    max-width:100vw !important;
+    height:100svh;
+    max-height:100svh;
+    margin:0;
+    border-radius:0;
+    padding:14px 14px calc(14px + env(safe-area-inset-bottom));
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  #call-modal h3{font-size:18px}
+  .video-grid{gap:8px}
+  .video-grid.focus-remote #remote-vbox,
+  .video-grid.focus-local #local-vbox{min-height:unset;flex:1}
+  .vbox{min-height:unset}
+  .video-grid.focus-remote #local-vbox,
+  .video-grid.focus-local #remote-vbox{
+    width:128px;height:92px;right:10px;bottom:10px;border-radius:16px
+  }
+  .call-bar{
+    gap:10px;
+    margin-top:12px;
+    flex-wrap:wrap;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .call-btn{width:56px;height:56px;border-radius:20px;font-size:20px}
+  /* на телефонах чаще всего нет/не нужно */
+  #btn-share{display:none}
+  #btn-min{display:none}
+}
+
 /* INCOMING CALL MODAL */
 .incoming-call-box { text-align: center; }
 .inc-ava { width: 100px; height: 100px; border-radius: 50%; font-family: 'Unbounded', sans-serif; background: linear-gradient(135deg, var(--accent), #a29bfe); color: white; font-size: 36px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; animation: ringPulse 1.5s infinite; }
@@ -549,8 +584,8 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
     <div class="inc-name" id="inc-caller-name">Имя Звонящего</div>
     <div class="inc-status">Входящий звонок...</div>
     <div class="call-bar">
-      <button class="call-btn danger" onclick="declineCall()" title="Отклонить">📞</button>
-      <button class="call-btn accept-btn" onclick="answerCall()" title="Принять">📞</button>
+      <button class="call-btn danger" onclick="declineCall()" title="Отклонить">✕</button>
+      <button class="call-btn accept-btn" onclick="answerCall()" title="Принять">✓</button>
     </div>
   </div>
 </div>
@@ -624,6 +659,7 @@ let callIceUnsubs=[];
 // WEBRTC CALL VARIABLES
 let pc = null;
 let currentCallId = null;
+let currentCallDocRef = null;
 let callUnsub = null;
 let globalCallUnsub = null;
 let localStream = null;
@@ -635,7 +671,43 @@ let callMinimized = false;
 let callModalEl = null;
 let callModalParentEl = null;
 let callModalNextSibling = null;
-const servers = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
+let callRole = null; // 'caller' | 'callee'
+let iceRestartAttempts = 0;
+let pendingRemoteCandidates = [];
+
+function getRtcConfig(){
+  // TURN нужен, чтобы звонки работали через разные сети/операторов (симметричный NAT).
+  // Можно задать в консоли/в коде:
+  // window.TURN_URL="turn:turn.example.com:3478?transport=udp"
+  // window.TURN_USER="user"
+  // window.TURN_PASS="pass"
+  const iceServers=[
+    { urls:['stun:stun1.l.google.com:19302','stun:stun2.l.google.com:19302','stun:stun.cloudflare.com:3478'] }
+  ];
+  const turnUrl=(window.TURN_URL||'').trim();
+  const turnUser=(window.TURN_USER||'').trim();
+  const turnPass=(window.TURN_PASS||'').trim();
+  if(turnUrl && turnUser && turnPass){
+    iceServers.push({ urls:turnUrl, username:turnUser, credential:turnPass });
+  }
+  return {
+    iceServers,
+    iceCandidatePoolSize: 10,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
+    // если задан TURN — можно жёстко форсить relay, чтобы не зависеть от P2P, но оставим 'all'
+    iceTransportPolicy: 'all',
+  };
+}
+
+function flushPendingCandidates(){
+  if(!pc?.currentRemoteDescription) return;
+  const list=pendingRemoteCandidates;
+  pendingRemoteCandidates=[];
+  list.forEach(c=>{
+    try{ pc.addIceCandidate(c); }catch(e){}
+  });
+}
 
 if(location.protocol === 'file:') document.getElementById('proto-warning').style.display = 'block';
 
@@ -1940,12 +2012,62 @@ function watchIceCollection(colRef){
       if(change.type!=='added'||!pc)return;
       const raw=change.doc.data();
       try{
-        if(raw&&(raw.candidate!==undefined||raw.sdpMid!==undefined))
-          pc.addIceCandidate(new RTCIceCandidate(raw));
+        if(raw&&(raw.candidate!==undefined||raw.sdpMid!==undefined)){
+          const cand=new RTCIceCandidate(raw);
+          if(!pc.currentRemoteDescription){
+            pendingRemoteCandidates.push(cand);
+          }else{
+            pc.addIceCandidate(cand);
+          }
+        }
       }catch(err){console.warn('ICE candidate',err);}
     });
   });
   callIceUnsubs.push(unsub);
+}
+
+async function restartIce(){
+  if(!pc || !currentCallDocRef) return;
+  if(iceRestartAttempts>=2) return;
+  iceRestartAttempts++;
+  try{
+    if(callRole==='caller'){
+      $('call-sub').textContent='Переподключение…';
+      const offer=await pc.createOffer({iceRestart:true});
+      await pc.setLocalDescription(offer);
+      await updateDoc(currentCallDocRef,{
+        offer:{type:offer.type,sdp:offer.sdp},
+        status:'ringing',
+        iceRestartAt: Date.now(),
+      });
+    }else if(callRole==='callee'){
+      // callee сам по себе не может навязать рестарт — ждём обновлённый offer от caller
+      $('call-sub').textContent='Переподключение…';
+    }
+  }catch(e){
+    console.warn('ICE restart',e);
+  }
+}
+
+function bindPcStateHandlers(){
+  if(!pc) return;
+  pc.oniceconnectionstatechange=()=>{
+    const st=pc.iceConnectionState;
+    if(st==='connected' || st==='completed'){
+      iceRestartAttempts=0;
+      if($('call-sub')?.textContent) $('call-sub').textContent='В эфире';
+      return;
+    }
+    if(st==='failed'){
+      restartIce();
+    }
+  };
+  pc.onconnectionstatechange=()=>{
+    const st=pc.connectionState;
+    if(st==='failed'){
+      restartIce();
+    }
+  };
 }
 
 function listenForCalls(){
@@ -2008,7 +2130,10 @@ async function startCall(){
     $('btn-mic').classList.add('on');
     $('btn-cam').classList.add('on');
 
-    pc=new RTCPeerConnection(servers);
+    pc=new RTCPeerConnection(getRtcConfig());
+    callRole='caller';
+    iceRestartAttempts=0;
+    pendingRemoteCandidates=[];
     remoteStream=new MediaStream();
 
     const rv=document.createElement('div');
@@ -2040,6 +2165,7 @@ async function startCall(){
 
     const callDoc=doc(collection(db,'calls'));
     currentCallId=callDoc.id;
+    currentCallDocRef=callDoc;
     const offerCandidates=collection(callDoc,'callerCandidates');
     const answerCandidates=collection(callDoc,'calleeCandidates');
 
@@ -2071,11 +2197,13 @@ async function startCall(){
       if(data.answer&&!pc.currentRemoteDescription){
         pc.setRemoteDescription(new RTCSessionDescription(data.answer)).then(()=>{
           $('call-sub').textContent='В эфире';
+          flushPendingCandidates();
         }).catch(e=>console.warn('setRemoteDescription',e));
       }
     });
 
     watchIceCollection(answerCandidates);
+    bindPcStateHandlers();
     bindCallVideoHandlers();
     setCallFocus('remote');
   }catch(error){
@@ -2099,6 +2227,7 @@ async function answerCall(){
 
   try{
     const callDoc=doc(db,'calls',rid);
+    currentCallDocRef=callDoc;
     const callSnap=await getDoc(callDoc);
     const callData=callSnap.data();
     if(!callData?.offer){toast('Звонок недоступен');endCall(false);return;}
@@ -2109,7 +2238,10 @@ async function answerCall(){
     $('btn-mic').classList.add('on');
     $('btn-cam').classList.add('on');
 
-    pc=new RTCPeerConnection(servers);
+    pc=new RTCPeerConnection(getRtcConfig());
+    callRole='callee';
+    iceRestartAttempts=0;
+    pendingRemoteCandidates=[];
     remoteStream=new MediaStream();
 
     const rv=document.createElement('div');
@@ -2158,13 +2290,30 @@ async function answerCall(){
     setCallFocus('remote');
     updateRemoteLabel();
     safePlayVideo($('remote-video'));
+    flushPendingCandidates();
+    bindPcStateHandlers();
 
     callUnsub=onSnapshot(callDoc,snapshot=>{
       if(!snapshot.exists())return;
-      const st=snapshot.data().status;
+      const d=snapshot.data();
+      const st=d.status;
       if(st==='ended'||st==='declined'){
         endCall(false);
         toast('Звонок завершён');
+      }
+      // ICE-restart: caller мог обновить offer — нужно принять новое SDP и ответить.
+      if(d.offer && pc && pc.currentRemoteDescription && d.offer.sdp && d.offer.sdp!==pc.currentRemoteDescription.sdp){
+        (async()=>{
+          try{
+            $('call-sub').textContent='Переподключение…';
+            await pc.setRemoteDescription(new RTCSessionDescription(d.offer));
+            const a=await pc.createAnswer();
+            await pc.setLocalDescription(a);
+            await updateDoc(callDoc,{answer:{type:a.type,sdp:a.sdp},status:'active',iceRestartAckAt:Date.now()});
+            $('call-sub').textContent='В эфире';
+            flushPendingCandidates();
+          }catch(e){console.warn('offer update',e);}
+        })();
       }
     });
   }catch(error){
@@ -2193,6 +2342,10 @@ async function endCall(updateDb=true){
     try{await updateDoc(doc(db,'calls',id),{status:'ended'});}catch(e){}
   }
   currentCallId=null;
+  currentCallDocRef=null;
+  callRole=null;
+  iceRestartAttempts=0;
+  pendingRemoteCandidates=[];
   if(callUnsub){callUnsub();callUnsub=null;}
   teardownCallMedia();
   setCallFloatOpen(false);
