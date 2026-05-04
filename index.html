@@ -100,6 +100,19 @@ body{font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);dis
 .vbox{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;position:relative;min-height:240px;display:flex;align-items:center;justify-content:center;}
 .vbox video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
 .vlabel{position:absolute;left:10px;bottom:10px;background:#0008;color:#fff;padding:4px 8px;border-radius:10px;font-size:11px}
+.call-float{position:fixed;right:16px;bottom:16px;width:min(360px,calc(100vw - 32px));z-index:600;display:none}
+.call-float.open{display:block}
+.call-float .call-float-card{background:var(--card);border:1px solid var(--border);border-radius:20px;box-shadow:0 30px 80px #000b;overflow:hidden}
+.call-float .call-float-head{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--border);cursor:move;user-select:none}
+.call-float .call-float-title{font-weight:700;font-size:13px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.call-float .call-float-actions{display:flex;gap:6px}
+.call-float .call-float-actions .hbtn{width:32px;height:32px;border-radius:10px}
+.call-float .modal{max-width:unset!important;width:100%;padding:14px}
+.call-float .call-bar{margin-top:12px}
+.call-float .video-grid.focus-remote #remote-vbox,
+.call-float .video-grid.focus-local #local-vbox{min-height:240px}
+.call-float .video-grid.focus-remote #local-vbox,
+.call-float .video-grid.focus-local #remote-vbox{width:160px;height:110px}
 .call-bar{display:flex;gap:12px;justify-content:center;margin-top:20px;}
 .call-btn{width:54px;height:54px;border-radius:18px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;font-size:20px; transition: 0.2s; display:flex; align-items:center; justify-content:center;}
 .call-btn:hover{background:var(--card2);}
@@ -558,8 +571,22 @@ body.theme-light{--bg:#f0f0ff;--surface:#fff;--card:#f8f8ff;--card2:#eeeeff;--bo
       <button class="call-btn" id="btn-flip" onclick="flipCamera()" title="Переключить камеру (фронт/тыл)">🔄</button>
       <button class="call-btn" id="btn-share" onclick="toggleScreenShare()" title="Демонстрация экрана">🖥</button>
       <button class="call-btn" id="btn-focus" onclick="toggleCallFocus()" title="Собеседник на весь экран">⛶</button>
+      <button class="call-btn" id="btn-min" onclick="minimizeCall()" title="Свернуть звонок">▢</button>
       <button class="call-btn danger" onclick="endCall()" title="Завершить">⎋</button>
     </div>
+  </div>
+</div>
+
+<div class="call-float" id="call-float">
+  <div class="call-float-card">
+    <div class="call-float-head" id="call-float-head">
+      <div class="call-float-title" id="call-float-title">Звонок</div>
+      <div class="call-float-actions">
+        <div class="hbtn" onclick="restoreCall()" title="Развернуть">⤢</div>
+        <div class="hbtn" onclick="endCall()" title="Завершить" style="color:var(--red)">⎋</div>
+      </div>
+    </div>
+    <div id="call-float-body"></div>
   </div>
 </div>
 
@@ -604,6 +631,10 @@ let remoteStream = null;
 let screenShareStream = null;
 let cameraFacing = 'user';
 let callFocus = 'remote';
+let callMinimized = false;
+let callModalEl = null;
+let callModalParentEl = null;
+let callModalNextSibling = null;
 const servers = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
 
 if(location.protocol === 'file:') document.getElementById('proto-warning').style.display = 'block';
@@ -1695,6 +1726,92 @@ function toggleFullscreen(el){
   }catch(e){}
 }
 
+function safePlayVideo(el){
+  if(!el||typeof el.play!=='function')return;
+  try{
+    const p=el.play();
+    if(p&&typeof p.catch==='function')p.catch(()=>{});
+  }catch(e){}
+}
+
+function setCallFloatOpen(open){
+  const f=$('call-float');
+  if(!f)return;
+  f.classList.toggle('open',!!open);
+}
+
+function minimizeCall(){
+  if(callMinimized)return;
+  const overlay=$('call-modal');
+  const modal=overlay?.querySelector?.('.modal');
+  const body=$('call-float-body');
+  if(!overlay||!modal||!body)return;
+  callModalEl=modal;
+  callModalParentEl=overlay;
+  callModalNextSibling=modal.nextSibling;
+  $('call-float-title').textContent=$('call-title')?.textContent||'Звонок';
+  body.appendChild(modal);
+  closeModal('call-modal');
+  setCallFloatOpen(true);
+  callMinimized=true;
+  bindCallFloatDrag();
+}
+
+function restoreCall(){
+  if(!callMinimized)return;
+  const overlay=callModalParentEl||$('call-modal');
+  const modal=callModalEl||overlay?.querySelector?.('.modal');
+  if(!overlay||!modal)return;
+  if(callModalNextSibling)overlay.insertBefore(modal,callModalNextSibling);
+  else overlay.appendChild(modal);
+  setCallFloatOpen(false);
+  openModal('call-modal');
+  callMinimized=false;
+}
+
+function bindCallFloatDrag(){
+  const head=$('call-float-head');
+  const wrap=$('call-float');
+  if(!head||!wrap||head.dataset.bound==='1')return;
+  head.dataset.bound='1';
+  let dragging=false, sx=0, sy=0, ox=0, oy=0;
+  const onDown=e=>{
+    dragging=true;
+    const p=e.touches?.[0]||e;
+    sx=p.clientX; sy=p.clientY;
+    const r=wrap.getBoundingClientRect();
+    ox=r.left; oy=r.top;
+    wrap.style.left=ox+'px';
+    wrap.style.top=oy+'px';
+    wrap.style.right='auto';
+    wrap.style.bottom='auto';
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp,{once:true});
+    document.addEventListener('touchmove',onMove,{passive:false});
+    document.addEventListener('touchend',onUp,{once:true});
+  };
+  const onMove=e=>{
+    if(!dragging)return;
+    if(e.cancelable)e.preventDefault();
+    const p=e.touches?.[0]||e;
+    const dx=p.clientX-sx, dy=p.clientY-sy;
+    let nx=ox+dx, ny=oy+dy;
+    const maxX=window.innerWidth-wrap.offsetWidth-8;
+    const maxY=window.innerHeight-wrap.offsetHeight-8;
+    nx=Math.max(8,Math.min(maxX,nx));
+    ny=Math.max(8,Math.min(maxY,ny));
+    wrap.style.left=nx+'px';
+    wrap.style.top=ny+'px';
+  };
+  const onUp=()=>{
+    dragging=false;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('touchmove',onMove);
+  };
+  head.addEventListener('mousedown',onDown);
+  head.addEventListener('touchstart',onDown,{passive:false});
+}
+
 function guessIsScreenTrack(track){
   try{
     const s=track?.getSettings?.()||{};
@@ -1726,6 +1843,10 @@ function bindCallVideoHandlers(){
   }
   if(lv)lv.onclick=e=>e.stopPropagation();
   if(rv)rv.onclick=e=>e.stopPropagation();
+
+  // автозапуск (для звука/видео у удалённого)
+  safePlayVideo(lv);
+  safePlayVideo(rv);
 }
 
 function getVideoSender(){
@@ -1743,6 +1864,7 @@ async function stopScreenShareIfAny(){
     try{await vSender.replaceTrack(cam);}catch(e){console.warn(e);}
   }
   if($('local-video'))$('local-video').srcObject=localStream;
+  safePlayVideo($('local-video'));
   $('btn-share')?.classList.remove('on','share-on');
   const ll=$('local-label');
   if(ll)ll.textContent='Вы';
@@ -1768,6 +1890,7 @@ async function toggleScreenShare(){
     const mix=new MediaStream([screenTrack]);
     if(aud)mix.addTrack(aud);
     $('local-video').srcObject=mix;
+    safePlayVideo($('local-video'));
     screenTrack.onended=()=>{stopScreenShareIfAny();};
     $('btn-share').classList.add('on','share-on');
     const ll=$('local-label');
@@ -1804,6 +1927,7 @@ async function flipCamera(){
       localStream=nx;
     }
     $('local-video').srcObject=localStream;
+    safePlayVideo($('local-video'));
   }catch(e){
     cameraFacing=cameraFacing==='user'?'environment':'user';
     toast('Переключение камеры: '+(e.message||e));
@@ -1880,7 +2004,7 @@ async function startCall(){
   try{
     localStream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});
     const lv=$('local-video');
-    if(lv)lv.srcObject=localStream;
+    if(lv){lv.srcObject=localStream; safePlayVideo(lv);}
     $('btn-mic').classList.add('on');
     $('btn-cam').classList.add('on');
 
@@ -1902,6 +2026,7 @@ async function startCall(){
     rv.appendChild(lab);
     $('video-grid').appendChild(rv);
     $('remote-video').srcObject=remoteStream;
+    safePlayVideo($('remote-video'));
 
     localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));
     pc.ontrack=ev=>{
@@ -1910,6 +2035,7 @@ async function startCall(){
         if(!has)remoteStream.addTrack(track);
       });
       updateRemoteLabel();
+      safePlayVideo($('remote-video'));
     };
 
     const callDoc=doc(collection(db,'calls'));
@@ -1979,6 +2105,7 @@ async function answerCall(){
 
     localStream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});
     $('local-video').srcObject=localStream;
+    safePlayVideo($('local-video'));
     $('btn-mic').classList.add('on');
     $('btn-cam').classList.add('on');
 
@@ -2000,6 +2127,7 @@ async function answerCall(){
     rv.appendChild(lab);
     $('video-grid').appendChild(rv);
     $('remote-video').srcObject=remoteStream;
+    safePlayVideo($('remote-video'));
 
     localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));
     pc.ontrack=ev=>{
@@ -2008,6 +2136,7 @@ async function answerCall(){
         if(!has)remoteStream.addTrack(track);
       });
       updateRemoteLabel();
+      safePlayVideo($('remote-video'));
     };
 
     const answerCandidates=collection(callDoc,'calleeCandidates');
@@ -2028,6 +2157,7 @@ async function answerCall(){
     bindCallVideoHandlers();
     setCallFocus('remote');
     updateRemoteLabel();
+    safePlayVideo($('remote-video'));
 
     callUnsub=onSnapshot(callDoc,snapshot=>{
       if(!snapshot.exists())return;
@@ -2065,6 +2195,11 @@ async function endCall(updateDb=true){
   currentCallId=null;
   if(callUnsub){callUnsub();callUnsub=null;}
   teardownCallMedia();
+  setCallFloatOpen(false);
+  if(callMinimized){
+    // вернуть DOM на место, чтобы в следующий раз не сломать модалку
+    try{restoreCall();}catch(e){}
+  }
 }
 
 function toggleMic() {
@@ -2118,6 +2253,8 @@ window.toggleCam = toggleCam;
 window.toggleScreenShare = toggleScreenShare;
 window.flipCamera = flipCamera;
 window.toggleCallFocus = toggleCallFocus;
+window.minimizeCall = minimizeCall;
+window.restoreCall = restoreCall;
 window.unpin = unpin;
 window.cancelReply = cancelReply;
 window.searchMessages = searchMessages;
