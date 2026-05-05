@@ -720,6 +720,10 @@ let pendingRemoteCandidates = [];
 let callConnTimer = null;
 let callStateTimer = null;
 
+// ==== P2P MEDIA (DataChannel) ====
+const p2pMediaById = new Map(); // p2pId -> { url, mime, name, size, kind }
+let p2pUnsub = null;
+
 function loadTurnConfig(){
   try{
     const raw=localStorage.getItem('nx_turn');
@@ -1158,6 +1162,125 @@ async function initApp(){
   loadChats();
   buildEmoji();
   listenForCalls();
+  listenForP2PMedia();
+}
+
+function listenForP2PMedia(){
+  if(p2pUnsub){p2pUnsub();p2pUnsub=null;}
+  if(!me)return;
+  const q=query(collection(db,'p2p_calls'),where('to','==',me.uid),where('status','==','ringing'));
+  p2pUnsub=onSnapshot(q,snap=>{
+    snap.docChanges().forEach(ch=>{
+      if(ch.type!=='added'&&ch.type!=='modified')return;
+      const docSnap=ch.doc;
+      const d=docSnap.data();
+      if(!d||d.type!=='media'||d.status!=='ringing')return;
+      // auto accept (online-only)
+      answerP2PMedia(docSnap.id,d).catch(e=>console.warn('answerP2P',e));
+    });
+  });
+}
+
+async function answerP2PMedia(callId,data){
+  if(!me||!data?.offer||!data?.from||!data?.chatId||!data?.p2pId)return;
+
+  // if we already have it, skip
+  if(p2pMediaById.has(data.p2pId)) return;
+
+  const callDoc=doc(db,'p2p_calls',callId);
+  const callerCandidates=collection(callDoc,'callerCandidates');
+  const calleeCandidates=collection(callDoc,'calleeCandidates');
+
+  const rtc=new RTCPeerConnection(getRtcConfig());
+  rtc.onicecandidate=ev=>{
+    if(ev.candidate)addDoc(calleeCandidates,ev.candidate.toJSON()).catch(()=>{});
+  };
+
+  const pendingCandidates=[];
+  const unsubIce=onSnapshot(callerCandidates,snap=>{
+    snap.docChanges().forEach(ch=>{
+      if(ch.type!=='added')return;
+      const raw=ch.doc.data();
+      try{
+        const cand=new RTCIceCandidate(raw);
+        if(!rtc.currentRemoteDescription) pendingCandidates.push(cand);
+        else rtc.addIceCandidate(cand);
+      }catch(e){}
+    });
+  });
+
+  let meta=null;
+  let chunks=[];
+  let received=0;
+  let expected=0;
+
+  const finish=async (ok, errMsg)=>{
+    try{unsubIce();}catch(e){}
+    try{rtc.close();}catch(e){}
+    try{await updateDoc(callDoc,{status:'ended',endedAt:Date.now(),ok:!!ok,error:errMsg||''});}catch(e){}
+  };
+
+  rtc.ondatachannel=ev=>{
+    const dc=ev.channel;
+    dc.binaryType='arraybuffer';
+    dc.onmessage=async (e)=>{
+      try{
+        if(typeof e.data==='string'){
+          const j=JSON.parse(e.data);
+          if(j.t==='meta'){
+            meta=j;
+            expected=Number(j.size||0);
+            chunks=[];
+            received=0;
+            // create chat message placeholder if not exists
+            if(j.chatId && j.msgId){
+              // try to mark as receiving (best-effort)
+              updateDoc(doc(db,'chats',j.chatId,'messages',j.msgId),{p2pStatus:'receiving'}).catch(()=>{});
+            }
+            return;
+          }
+          if(j.t==='done'){
+            if(!meta) return;
+            const blob=new Blob(chunks,{type:meta.mime||'application/octet-stream'});
+            const url=URL.createObjectURL(blob);
+            p2pMediaById.set(meta.p2pId,{url,mime:meta.mime||'',name:meta.name||'',size:meta.size||blob.size,kind:meta.kind||'file'});
+            // update message status (best-effort)
+            if(meta.chatId && meta.msgId){
+              updateDoc(doc(db,'chats',meta.chatId,'messages',meta.msgId),{p2pStatus:'received'}).catch(()=>{});
+            }else if(data.chatId && data.msgId){
+              updateDoc(doc(db,'chats',data.chatId,'messages',data.msgId),{p2pStatus:'received'}).catch(()=>{});
+            }
+            // force re-render if current chat open
+            try{
+              if(curChat?.id && meta.chatId===curChat.id) loadMsgs(curChat.id);
+            }catch(e){}
+            await finish(true,'');
+            return;
+          }
+          return;
+        }
+        const buf=e.data instanceof ArrayBuffer ? e.data : (e.data?.buffer||null);
+        if(!buf) return;
+        chunks.push(new Uint8Array(buf));
+        received+=buf.byteLength;
+        // optional: update progress
+      }catch(err){
+        await finish(false, err.message||String(err));
+      }
+    };
+  };
+
+  try{
+    await rtc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    for(const c of pendingCandidates){
+      try{await rtc.addIceCandidate(c);}catch(e){}
+    }
+    const answer=await rtc.createAnswer();
+    await rtc.setLocalDescription(answer);
+    await updateDoc(callDoc,{answer:{type:answer.type,sdp:answer.sdp},status:'connected',connectedAt:Date.now()});
+  }catch(e){
+    await finish(false, e.message||String(e));
+  }
 }
 
 async function saveProfile(){
@@ -1609,7 +1732,7 @@ function startReplyTo(mid,m){
   replyTo={id:mid,text:(m.text||'').slice(0,500),from:m.from};
   const nm=m.from===me.uid?'Вы':(curChat?.name||'Собеседник');
   $('rb-from').textContent='Ответ '+nm;
-  $('rb-text').textContent=m.imageUrl?'📷 Фото':(m.audioUrl?'🎙 Голосовое':(m.text||'Сообщение'));
+  $('rb-text').textContent=m.imageUrl?'📷 Фото':(m.audioUrl?'🎙 Голосовое':(m.videoUrl?'🎬 Видео':(m.circleUrl?'⭕ Кружок':(m.text||'Сообщение'))));
   $('reply-bar').classList.add('show');
 }
 
@@ -1676,7 +1799,7 @@ function startEditMessage(mid,m){
 
 async function pinMessage(mid,m){
   if(!curChat)return;
-  const snippet=(m.text||'').trim()||(m.imageUrl?'📷 Фото':(m.audioUrl?'🎙 Голосовое':'Сообщение'));
+  const snippet=(m.text||'').trim()||(m.imageUrl?'📷 Фото':(m.audioUrl?'🎙 Голосовое':(m.videoUrl?'🎬 Видео':(m.circleUrl?'⭕ Кружок':'Сообщение'))));
   try{
     await updateDoc(doc(db,'chats',curChat.id),{
       pinnedMessage:{id:mid,text:snippet.slice(0,280),from:m.from},
@@ -1705,7 +1828,7 @@ async function deleteMsgForEveryone(mid){
   if(!curChat)return;
   try{
     await updateDoc(doc(db,'chats',curChat.id,'messages',mid),{
-      text:'',imageUrl:null,audioUrl:null,reactions:{},deleted:true,
+      text:'',imageUrl:null,audioUrl:null,videoUrl:null,circleUrl:null,reactions:{},deleted:true,
     });
   }catch(e){toast(e.message);}
 }
@@ -1738,12 +1861,15 @@ async function forwardMessageTo(targetChatId,m){
   const payload={
     from:me.uid,ts:serverTimestamp(),readBy:[me.uid],
     forwarded:true,
-    text:m.text||'',imageUrl:m.imageUrl||null,audioUrl:m.audioUrl||null,
+    text:m.text||'',imageUrl:m.imageUrl||null,audioUrl:m.audioUrl||null,videoUrl:m.videoUrl||null,circleUrl:m.circleUrl||null,
   };
   if(payload.imageUrl&&!safeUrl(payload.imageUrl))payload.imageUrl=null;
+  if(payload.audioUrl&&!safeUrl(payload.audioUrl))payload.audioUrl=null;
+  if(payload.videoUrl&&!safeUrl(payload.videoUrl))payload.videoUrl=null;
+  if(payload.circleUrl&&!safeUrl(payload.circleUrl))payload.circleUrl=null;
   try{
     await addDoc(collection(db,'chats',targetChatId,'messages'),payload);
-    const pv=payload.imageUrl?'📷 Фото':(payload.audioUrl?'🎙 Голосовое':(payload.text||'Пересланное'));
+    const pv=payload.imageUrl?'📷 Фото':(payload.audioUrl?'🎙 Голосовое':(payload.videoUrl?'🎬 Видео':(payload.circleUrl?'⭕ Кружок':(payload.text||'Пересланное'))));
     const refChat=doc(db,'chats',targetChatId);
     const snap=await getDoc(refChat);
     const data=snap.data()||{};
@@ -1784,11 +1910,60 @@ function buildMsg(mid,m){
     bubble.appendChild(ft);
   }
 
+  // Resolve P2P payload to local object URL (if received)
+  const p2pMeta = m.p2p && m.p2p.id ? m.p2p : null;
+  const p2pLocal = p2pMeta ? p2pMediaById.get(p2pMeta.id) : null;
+
   if(m.deleted){
     const del=document.createElement('div');
     del.style.cssText='font-size:13px;color:var(--muted);font-style:italic';
     del.textContent='Сообщение удалено';
     bubble.appendChild(del);
+  }else if(p2pMeta){
+    if(p2pLocal){
+      if(p2pMeta.kind==='image'){
+        const img=document.createElement('img');
+        img.className='img-msg';
+        img.src=p2pLocal.url;
+        img.onclick=e=>{e.stopPropagation();openImg(img.src);};
+        bubble.appendChild(img);
+      }else if(p2pMeta.kind==='audio'){
+        const aud=document.createElement('audio');
+        aud.controls=true;
+        aud.preload='metadata';
+        aud.src=p2pLocal.url;
+        aud.onclick=e=>e.stopPropagation();
+        bubble.appendChild(aud);
+      }else if(p2pMeta.kind==='circle'){
+        const vid=document.createElement('video');
+        vid.className='circle-video';
+        vid.src=p2pLocal.url;
+        vid.playsInline=true;
+        vid.loop=true;
+        vid.muted=true;
+        vid.autoplay=true;
+        vid.controls=true;
+        vid.onclick=e=>e.stopPropagation();
+        bubble.appendChild(vid);
+        safePlayVideo(vid);
+      }else{ // video
+        const vid=document.createElement('video');
+        vid.style.cssText='width: min(360px, 100%); max-height: 420px; border-radius: 14px; border: 1px solid var(--border); background:#000; display:block; margin-bottom:4px;';
+        vid.src=p2pLocal.url;
+        vid.playsInline=true;
+        vid.controls=true;
+        vid.preload='metadata';
+        vid.onclick=e=>e.stopPropagation();
+        bubble.appendChild(vid);
+      }
+    }else{
+      const ph=document.createElement('div');
+      ph.style.cssText='font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center';
+      const label=p2pMeta.kind==='image'?'Фото':(p2pMeta.kind==='audio'?'Голосовое':(p2pMeta.kind==='circle'?'Кружок':'Видео'));
+      const st=(m.p2pStatus||'').toString();
+      ph.textContent=`${label} (P2P) — ${st||'ожидание'}`;
+      bubble.appendChild(ph);
+    }
   }else if(m.imageUrl&&safeUrl(m.imageUrl)){
     const img=document.createElement('img');
     img.className='img-msg';
@@ -1807,6 +1982,37 @@ function buildMsg(mid,m){
     aud.src=m.audioUrl;
     aud.onclick=e=>e.stopPropagation();
     bubble.appendChild(aud);
+    if(m.text){
+      const w=document.createElement('div');
+      w.innerHTML=esc(m.text).replace(/\n/g,'<br>');
+      bubble.appendChild(w);
+    }
+  }else if(m.circleUrl&&safeUrl(m.circleUrl)){
+    const vid=document.createElement('video');
+    vid.className='circle-video';
+    vid.src=m.circleUrl;
+    vid.playsInline=true;
+    vid.loop=true;
+    vid.muted=true;
+    vid.autoplay=true;
+    vid.controls=true;
+    vid.onclick=e=>e.stopPropagation();
+    bubble.appendChild(vid);
+    safePlayVideo(vid);
+    if(m.text){
+      const w=document.createElement('div');
+      w.innerHTML=esc(m.text).replace(/\n/g,'<br>');
+      bubble.appendChild(w);
+    }
+  }else if(m.videoUrl&&safeUrl(m.videoUrl)){
+    const vid=document.createElement('video');
+    vid.style.cssText='width: min(360px, 100%); max-height: 420px; border-radius: 14px; border: 1px solid var(--border); background:#000; display:block; margin-bottom:4px;';
+    vid.src=m.videoUrl;
+    vid.playsInline=true;
+    vid.controls=true;
+    vid.preload='metadata';
+    vid.onclick=e=>e.stopPropagation();
+    bubble.appendChild(vid);
     if(m.text){
       const w=document.createElement('div');
       w.innerHTML=esc(m.text).replace(/\n/g,'<br>');
@@ -1944,6 +2150,166 @@ function listenTyping(id){
   });
 }
 
+function ab2b64(buf){
+  let s='';
+  const bytes=new Uint8Array(buf);
+  const chunk=0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    s+=String.fromCharCode(...bytes.subarray(i,i+chunk));
+  }
+  return btoa(s);
+}
+function b642ab(b64){
+  const bin=atob(b64);
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function buildP2pId(){
+  return `p2p_${Date.now()}_${Math.random().toString(16).slice(2)}_${me?.uid?.slice(0,6)||'u'}`;
+}
+
+function wait(ms){return new Promise(r=>setTimeout(r,ms));}
+
+async function dcSendWithBackpressure(dc, data){
+  const HI=8*1024*1024;
+  while(dc.bufferedAmount>HI) await wait(25);
+  dc.send(data);
+}
+
+async function sendP2PMedia(kind, blob, name){
+  if(!curChat||!curChat.pid||!me){toast('Выберите чат');return;}
+  if(!blob||!blob.size){toast('Пустой файл');return;}
+
+  // if we already know user is offline, avoid wasting time
+  if(settings.online && onlineByUid.get(curChat.pid)===false){
+    toast('Собеседник не в сети — P2P медиа не доставится');
+    return;
+  }
+
+  const p2pId=buildP2pId();
+  const mime=(blob.type||'application/octet-stream');
+  const size=blob.size;
+  const safeName=(name||'media').slice(0,120);
+
+  const msgRef = await addDoc(collection(db,'chats',curChat.id,'messages'),{
+    from:me.uid,
+    text:'',
+    ts:serverTimestamp(),
+    readBy:[me.uid],
+    p2p:{ id:p2pId, kind, name:safeName, mime, size },
+    p2pStatus:'sending',
+  });
+
+  // show instantly for sender
+  try{
+    const url=URL.createObjectURL(blob);
+    p2pMediaById.set(p2pId,{url,mime,name:safeName,size,kind});
+  }catch(e){}
+
+  await bumpChatPreview(kind==='image'?'🖼 Фото':(kind==='audio'?'🎙 Голосовое':(kind==='circle'?'⭕ Кружок':'🎬 Видео')));
+
+  // create signaling doc
+  const callDoc=doc(collection(db,'p2p_calls'));
+  const callId=callDoc.id;
+  const callerCandidates=collection(callDoc,'callerCandidates');
+  const calleeCandidates=collection(callDoc,'calleeCandidates');
+
+  const rtc=new RTCPeerConnection(getRtcConfig());
+  const dc=rtc.createDataChannel('media',{ordered:true});
+
+  const done=async (ok,errMsg)=>{
+    try{await updateDoc(doc(db,'chats',curChat.id,'messages',msgRef.id),{p2pStatus: ok?'sent':'failed', p2pError: ok?deleteField():(errMsg||'')});}catch(e){}
+    try{await updateDoc(callDoc,{status:'ended',endedAt:Date.now(),ok:!!ok,error:errMsg||''});}catch(e){}
+    try{rtc.close();}catch(e){}
+  };
+
+  rtc.onicecandidate=ev=>{
+    if(ev.candidate) addDoc(callerCandidates,ev.candidate.toJSON()).catch(()=>{});
+  };
+
+  // watch remote candidates
+  const unsubIce=onSnapshot(calleeCandidates,snap=>{
+    snap.docChanges().forEach(ch=>{
+      if(ch.type!=='added')return;
+      const raw=ch.doc.data();
+      try{ rtc.addIceCandidate(new RTCIceCandidate(raw)); }catch(e){}
+    });
+  });
+
+  // wait for answer
+  const unsub=onSnapshot(callDoc,async snap=>{
+    const d=snap.data();
+    if(!d)return;
+    if(d.status==='declined' || d.status==='ended'){
+      unsub(); unsubIce();
+      await done(false, d.error||'Отклонено/завершено');
+      return;
+    }
+    if(d.answer && !rtc.currentRemoteDescription){
+      try{
+        await rtc.setRemoteDescription(new RTCSessionDescription(d.answer));
+      }catch(e){
+        unsub(); unsubIce();
+        await done(false,'SDP: '+(e.message||e));
+      }
+    }
+  });
+
+  dc.onopen=async ()=>{
+    try{
+      // meta first (json string)
+      await dcSendWithBackpressure(dc, JSON.stringify({t:'meta',p2pId,kind,name:safeName,mime,size,chatId:curChat.id,msgId:msgRef.id}));
+      const CHUNK=64*1024;
+      let offset=0;
+      while(offset<size){
+        const part=blob.slice(offset, offset+CHUNK);
+        const buf=await part.arrayBuffer();
+        await dcSendWithBackpressure(dc, buf);
+        offset+=buf.byteLength;
+      }
+      await dcSendWithBackpressure(dc, JSON.stringify({t:'done',p2pId}));
+      unsub(); unsubIce();
+      await done(true,'');
+    }catch(e){
+      unsub(); unsubIce();
+      await done(false, e.message||String(e));
+    }
+  };
+  dc.onerror=async ()=>{ /* handled by timeouts below */ };
+
+  // offer
+  try{
+    const offer=await rtc.createOffer();
+    await rtc.setLocalDescription(offer);
+    await setDoc(callDoc,{
+      type:'media',
+      status:'ringing',
+      from:me.uid,
+      to:curChat.pid,
+      chatId:curChat.id,
+      p2pId,
+      msgId:msgRef.id,
+      offer:{type:offer.type,sdp:offer.sdp},
+      createdAt: Date.now(),
+    });
+  }catch(e){
+    unsub(); unsubIce();
+    await done(false, e.message||String(e));
+    return;
+  }
+
+  // timeout if no connect
+  setTimeout(()=>{
+    if(dc.readyState!=='open'){
+      try{unsub();}catch(e){}
+      try{unsubIce();}catch(e){}
+      done(false,'Таймаут P2P');
+    }
+  }, 22000);
+}
+
 async function toggleVoice(){
   const btn=$('voice-btn');
   if(!isRec){
@@ -1955,13 +2321,7 @@ async function toggleVoice(){
       recObj.onstop=async ()=>{
         if(!curChat)return;
         const blob=new Blob(recChunks,{type:'audio/webm'});
-        const sr=ref(storage,`nexus_audio/${curChat.id}/${Date.now()}.webm`);
-        await uploadBytes(sr,blob);
-        const url=await getDownloadURL(sr);
-        await addDoc(collection(db,'chats',curChat.id,'messages'),{
-          from:me.uid,text:'',audioUrl:url,ts:serverTimestamp(),readBy:[me.uid],
-        });
-        await bumpChatPreview('🎙️ Голосовое');
+        await sendP2PMedia('audio', blob, `${Date.now()}.webm`);
       };
       recObj.start();
       isRec=true; btn.classList.add('rec');
@@ -1978,14 +2338,74 @@ async function onFileImg(ev){
   if(!f||!curChat)return;
   ev.target.value='';
   try{
-    const sr=ref(storage,`nexus_img/${curChat.id}/${Date.now()}_${f.name}`);
-    await uploadBytes(sr,f);
-    const url=await getDownloadURL(sr);
-    await addDoc(collection(db,'chats',curChat.id,'messages'),{
-      from:me.uid,text:'',imageUrl:url,ts:serverTimestamp(),readBy:[me.uid],
-    });
-    await bumpChatPreview('📷 Фото');
+    await sendP2PMedia('image', f, `${Date.now()}_${f.name||'image'}`);
   }catch(e){toast('Фото: '+e.message);}
+}
+
+async function onFileVideo(ev){
+  const f=ev.target.files[0];
+  if(!f||!curChat)return;
+  ev.target.value='';
+  if(!f.type.startsWith('video/')){toast('Выберите видео');return;}
+  try{
+    await sendP2PMedia('video', f, `${Date.now()}_${f.name||'video'}`);
+  }catch(e){toast('Видео: '+e.message);}
+}
+
+let circleRec=null;
+let circleRecChunks=[];
+let circleRecTimer=null;
+
+function pickCircleMimeType(){
+  const candidates=[
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  for(const t of candidates){
+    try{ if(window.MediaRecorder&&MediaRecorder.isTypeSupported(t)) return t; }catch(e){}
+  }
+  return '';
+}
+
+async function recordCircle(){
+  if(!curChat)return;
+  if(circleRec){
+    try{circleRec.stop();}catch(e){}
+    return;
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'user'},width:{ideal:720},height:{ideal:720}},
+      audio:true,
+    });
+    circleRecChunks=[];
+    const mimeType=pickCircleMimeType();
+    circleRec=new MediaRecorder(stream,mimeType?{mimeType}:{});
+    circleRec.ondataavailable=e=>{ if(e.data&&e.data.size) circleRecChunks.push(e.data); };
+    circleRec.onstop=async ()=>{
+      try{stream.getTracks().forEach(t=>t.stop());}catch(e){}
+      const chunks=circleRecChunks;
+      circleRec=null;
+      circleRecChunks=[];
+      if(circleRecTimer){clearTimeout(circleRecTimer);circleRecTimer=null;}
+      if(!curChat||!chunks.length) return;
+      try{
+        const blob=new Blob(chunks,{type:mimeType||'video/webm'});
+        await sendP2PMedia('circle', blob, `${Date.now()}.webm`);
+      }catch(e){toast('Кружок: '+(e.message||e));}
+    };
+    circleRec.start(500);
+    toast('Запись кружка… (до 30 сек)');
+    circleRecTimer=setTimeout(()=>{try{circleRec?.stop();}catch(e){}},30000);
+  }catch(e){
+    circleRec=null;
+    circleRecChunks=[];
+    if(circleRecTimer){clearTimeout(circleRecTimer);circleRecTimer=null;}
+    toast('Кружок: '+(e.message||e));
+  }
 }
 
 function buildEmoji(){
@@ -2703,6 +3123,8 @@ window.onKey = onKey;
 window.onType = onType;
 window.toggleVoice = toggleVoice;
 window.onFileImg = onFileImg;
+window.onFileVideo = onFileVideo;
+window.recordCircle = recordCircle;
 window.goBack = goBack;
 window.toggleEmoji = toggleEmoji;
 window.startCall = startCall;
