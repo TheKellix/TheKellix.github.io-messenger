@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Скачать NEXUS Messenger</title>
+  <link rel="icon" href="nexus.ico" type="image/x-icon">
+  
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Unbounded:wght@400;700;900&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg: #0d0d14;
+      --surface: #13131e;
+      --card: #1a1a28;
+      --border: #2e2e46;
+      --accent: #6c5ce7;
+      --accent-hover: #a29bfe;
+      --accent2: #00cec9;
+      --text: #eeeeff;
+      --muted: #a0a0c0;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Manrope', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+      line-height: 1.6;
+    }
+
+    /* Анимированный фон (светящиеся пятна) */
+    .glow-blob {
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(108,92,231,0.15) 0%, rgba(0,0,0,0) 70%);
+      border-radius: 50%;
+      z-index: -1;
+      filter: blur(40px);
+      animation: float 10s infinite alternate;
+    }
+    .glow-blob.cyan {
+      background: radial-gradient(circle, rgba(0,206,201,0.1) 0%, rgba(0,0,0,0) 70%);
+      top: 20%; right: 10%;
+      animation-delay: -5s;
+    }
+
+    @keyframes float {
+      0% { transform: translate(0, 0); }
+      100% { transform: translate(50px, 50px); }
+    }
+
+    /* Навигация */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 24px 8%;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .brand {
+      font-family: 'Unbounded', sans-serif;
+      font-weight: 900;
+      font-size: 24px;
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, #a29bfe, #00cec9);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-links { display: flex; gap: 30px; }
+    .nav-links a { color: var(--text); text-decoration: none; font-weight: 600; transition: color 0.2s; }
+    .nav-links a:hover { color: var(--accent2); }
+
+    /* Главный экран (Hero) */
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 100px 20px;
+      min-height: 70vh;
+      position: relative;
+    }
+
+    .badge {
+      background: rgba(108, 92, 231, 0.15);
+      color: var(--accent-hover);
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-bottom: 24px;
+      border: 1px solid rgba(108, 92, 231, 0.3);
+    }
+
+    .hero h1 {
+      font-family: 'Unbounded', sans-serif;
+      font-size: clamp(36px, 5vw, 64px);
+      font-weight: 900;
+      line-height: 1.2;
+      margin-bottom: 20px;
+      max-width: 800px;
+    }
+
+    .hero p {
+      font-size: 18px;
+      color: var(--muted);
+      max-width: 600px;
+      margin-bottom: 40px;
+    }
+
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: linear-gradient(135deg, var(--accent), #a29bfe);
+      color: #fff;
+      padding: 18px 36px;
+      border-radius: 16px;
+      font-size: 18px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      box-shadow: 0 10px 30px rgba(108, 92, 231, 0.3);
+    }
+
+    .download-btn:hover {
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 15px 40px rgba(108, 92, 231, 0.5);
+    }
+
+    .download-meta {
+      margin-top: 16px;
+      font-size: 13px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Особенности (Features) */
+    .features {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 80px 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 30px;
+    }
+
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 32px;
+      transition: transform 0.3s, border-color 0.3s;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-5px);
+      border-color: var(--accent);
+    }
+
+    .feature-icon {
+      font-size: 40px;
+      margin-bottom: 20px;
+      background: rgba(108, 92, 231, 0.1);
+      width: 70px;
+      height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 18px;
+    }
+
+    .feature-card h3 {
+      font-family: 'Unbounded', sans-serif;
+      font-size: 20px;
+      margin-bottom: 12px;
+    }
+
+    .feature-card p {
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    /* Подвал */
+    footer {
+      text-align: center;
+      padding: 40px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      margin-top: 50px;
+      font-size: 14px;
+    }
+
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="glow-blob"></div>
+  <div class="glow-blob cyan"></div>
+
+  <nav>
+    <div class="brand">NEXUS</div>
+    <div class="nav-links">
+      <a href="#features">Возможности</a>
+      <a href="#">Помощь</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="badge">Desktop Release v1.0</div>
+    <h1>Общайтесь без границ. Быстро и безопасно.</h1>
+    <p>NEXUS — это легковесный десктопный мессенджер нового поколения. Видеозвонки, демонстрация экрана, видео-кружочки и обмен файлами в одном стильном приложении.</p>
+    
+    <a href="https://mega.nz/folder/haMyySrC#Et5CtkLwLLafLn1PT_2p9Q" class="download-btn" target="_blank">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+  Скачать NEXUS
+</a>
+    <div class="download-meta">Windows 10/11 • Формат: .exe • Бесплатно</div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="feature-card">
+      <div class="feature-icon">📞</div>
+      <h3>P2P Звонки</h3>
+      <p>Кристально чистые видео и аудио звонки напрямую (Peer-to-Peer). Поддержка демонстрации экрана в один клик.</p>
+    </div>
+    
+    <div class="feature-card">
+      <div class="feature-icon">⭕</div>
+      <h3>Видео-кружочки</h3>
+      <p>Делитесь живыми эмоциями! Записывайте короткие видео-сообщения (кружочки) и отправляйте их моментально.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🎨</div>
+      <h3>Кастомизация</h3>
+      <p>Темная и светлая темы, выбор акцентных цветов, поддержка @username и детальная настройка вашего профиля.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p>&copy; 2026 NEXUS Messenger. Все права защищены.</p>
+  </footer>
+
+  <script>
+    // Простая анимация появления карточек при скролле
+    document.addEventListener("DOMContentLoaded", () => {
+      const cards = document.querySelectorAll('.feature-card');
+      cards.forEach((card, index) => {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(20px)';
+        card.style.transition = 'all 0.5s ease ' + (index * 0.15) + 's';
+      });
+
+      setTimeout(() => {
+        cards.forEach(card => {
+          card.style.opacity = '1';
+          card.style.transform = 'translateY(0)';
+        });
+      }, 300);
+    });
+  </script>
+</body>
+</html>
